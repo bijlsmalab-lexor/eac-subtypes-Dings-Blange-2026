@@ -16,7 +16,7 @@ Each folder contains the code for the corresponding main or supplementary figure
 
 | Folder | Contents |
 |--------|----------|
-| `Figure 1/`  | Subtype discovery / consensus classification of the EAC cohort (`eac.bijlsma.186.s4b.Rmd`, rendered `.nb.html`) |
+| `Figure 1/`  | Subtype discovery / consensus classification of the EAC cohort (`eac.bijlsma.186.s4b.Rmd`, rendered `.nb.html`); subtype signature by anatomical site — primary vs non-liver vs liver metastases (`PathologyLiver.nb.html`) |
 | `Figure 2/`  | Single-cell subtype signal (`2E.FLOTplot.R`) |
 | `Figure 3/`  | Deconvolution of bulk (CPCT) tumors (`deconvolve_CPCT.Rmd`, rendered `.html`) |
 | `Figure 5/`  | Network analysis and gastric-cancer classifier signatures (`eac.bijlsma.186.s4b.network-analysis.Rmd`, `gc.classifier.signatures.Rmd`) |
