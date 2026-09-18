@@ -55,13 +55,17 @@ BiocManager::install(c(
 
 ## Data availability
 
-The scripts read processed data objects that are **not** included in this repository because of size and data-sharing policies. Source data underlying the figures are provided with the published article, and primary datasets are deposited as described in the manuscript's Data Availability statement:
+Source data underlying the figures are provided with the paper in a separate Excel file. The scripts read processed/primary data objects that are **not** included in this repository (size and data-sharing policies); these datasets are deposited as follows:
 
-- Single-cell and bulk RNA-seq: `<GEO accession — to add>`
-- (Phospho)proteomics: `<PRIDE/ProteomeXchange accession — to add>`
-- Public reference datasets: GDSC, TCGA-ESCA, CPCT (see manuscript for accessions)
+- **GSE254660** — raw NMF output (signatures and gene weights) and RNA-seq from non-matched resection and metastasis samples: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE254660
+- **GSE254942** — RNA-seq from pre-treatment primary tumor biopsies: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE254942
+- **GSE184654** — matched pre- and post-treatment samples: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE184654
+- **GSE346799** — single-nucleus data: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE346799
+- **GSE222078** — publicly available scRNA-seq from Croft *et al.*: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE222078
+- **PXD047796** — proteomics (ProteomeXchange): https://proteomecentral.proteomexchange.org/cgi/GetDataset?ID=PXD047796
+- **CPCT-02 cohort** — RNA-seq and clinical data available from the Hartwig Medical Foundation under restricted access, upon request: https://www.hartwigmedicalfoundation.nl/data/aanvragen-data/
 
-Update the placeholders above with the final accession numbers before making the repository public.
+The remaining data are available within the Article, Supplementary Information, or Source Data file.
 
 ## Reproducing the figures
 
