@@ -1,0 +1,551 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Deconvolute GAC EAC ESCC PEGASUS
+
+```{r}
+# install decoderr package
+#devtools::install_github("laurapeng/decoderr")
+library("decoderr")
+library(devtools)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+library(ConsensusClusterPlus)
+library(rmatio)
+library(pheatmap)
+library(plotly)
+library(reshape2)
+library(ggpubr)
+library(forcats)
+library(dplyr)
+library(ggthemes)
+library(tidyverse)
+library(ggExtra)
+
+Decon_single_sample_edit = function (data, sampleWeight, geneWeight) 
+{
+  refSet = list()
+  
+  foo = get("TCGA_RNAseq_PAAD")
+  refSet$geneInfo = as.data.frame(foo$geneInfo) #rm(foo)
+  refSet$expr =  read.delim("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/eac.bijlsma.186.s4b.txt", sep="\t", check.names = F)
+  rownames(refSet$expr) = refSet$expr$gene_id
+  refSet$expr$gene_id=NULL
+  refSet$sampleWeight = sampleWeight
+  refSet$geneWeight = geneWeight
+  refSet$sampleInfo =  as.data.frame(colnames(sampleWeight))
+
+  geneSigRef <- refSet$geneWeight
+  dataRef = refSet$expr#dataRef = log2(1 + refSet$expr) ### moet er een log-transformatie gebeuren? 
+  
+  geneIDRef = rownames(refSet$expr)
+  geneID <- rownames(data)
+  geneOvlp <- geneIDRef[geneIDRef %in% geneID]
+  indRef <- match(geneOvlp, geneIDRef)
+  dataRef <- dataRef[indRef, ]
+  geneSigRef <- geneSigRef[indRef, ]
+  indCur <- match(geneOvlp, geneID)
+  data <- data[indCur, ]
+  maxRef <- max(dataRef)
+  data <- (maxRef/max(data)) * data
+  callNNLS <- function(A, b) {
+    res <- nnls::nnls(A, b)$x
+    return(res)
+  }
+  sampleWeights <- t(apply(data, 2, function(x) callNNLS(as.matrix(geneSigRef), 
+                                                         x)))
+  colnames(sampleWeights) <- colnames(geneSigRef)
+  return(sampleWeights)
+}
+
+library(RColorBrewer)
+cols <- c("darkblue","blue", "white","red","darkred")
+newcol <- colorRampPalette(cols)
+col_breaks = seq(from=-2,to=2,by=0.1)
+ncols <- length(col_breaks)
+cols2 <- newcol(ncols)#apply the function to get 100 colours
+```
+
+```{r}
+load("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/eac.bijlsma.186.s4b.Rda")
+eac.bijlsma186 = data
+reference_set = data$expression_set
+rm(data)
+k=7
+ds = read.mat(paste0("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6//K",k, "_res.mat"))
+
+rownames(ds$genesigs) = rownames(reference_set)
+features <- c(sprintf("f%02d", seq(1,ncol(ds$genesigs))))
+colnames(ds$genesigs) <- features; rm(features)
+
+colnames(ds$samplesigs) = colnames(reference_set)
+
+```
+
+```{r}
+#load pegasus
+source("/Users/markdings/Documents/PhD/Scripts/PanGI_Network_analysis/datasets/read_excel.R")
+data <- read_excel_allsheets("/Users/markdings/Documents/PhD/Scripts/PanGI_Network_analysis/datasets/esca.pegasus.67.corrected.xlsx")
+```
+
+Deconvolution:
+```{r}
+sampleWeights = Decon_single_sample_edit(data = data$expression_set,sampleWeight = ds$samplesigs, geneWeight = ds$genesigs)
+```
+
+```{r}
+data$info = merge(data$info,sampleWeights, by.x="sample_id", by.y=0)
+colnames(data$info)
+```
+
+
+```{r}
+colnames_str <- paste0(paste(colnames(data$info), collapse = '", "'))
+cat(colnames_str)
+```
+
+```{r}
+colnames(data$info) = c(
+"sample_id",
+"biopsydate",
+"biopsylocation",
+"biopsysite",
+"birthyear",
+"cancersubtype",
+"cp_link_r2_sample",
+"deathdate",
+"firstresponse",
+"gender",
+"hasradiotherapypretreatment",
+"hassystemicpretreatment",
+"hmfpatientid",
+"hmfsampleid",
+"id",
+"patientid",
+"primarytumorlocation",
+"r2id",
+"responsedate",
+"responsemeasured",
+"sampleid",
+"setname",
+"treatment",
+"treatmentenddate",
+"treatmentgiven",
+"treatmentstartdate",
+"treatmenttype",
+"tumorpurity",
+"dings_km",
+"treatmentGiven",
+"treatmentStartDate",
+"treatmentEndDate",
+"treatment.dup1",
+"treatmentType",
+"responseDate",
+"responseMeasured",
+"firstResponse",
+"lastcontactDate",
+"OS_biopsydate",
+"OS_treatmentdate",
+"death",
+"Progression",
+"progressionDate",
+"Progression_num",
+"PFS",
+"PD",
+"treatmentGroup",
+"treatment.dup2",
+"lastPretreatment",
+"crossPretreatment",
+"RNAseq",
+"R2ID",
+"dings",
+"dings_num",
+"treatmentGroup_num",
+"treatmentLine_num",
+"treatmentLine",
+"biopsysite.simplified",
+"f01", "f02", "f03", "f04", "f05", "f06", "f07"
+)
+
+data$info = within(data$info, {
+  cp_link_r2_sample = as.factor(cp_link_r2_sample)
+  hassystemicpretreatment[hassystemicpretreatment=="nd"] = NA
+  hassystemicpretreatment = as.factor(hassystemicpretreatment)
+  hasradiotherapypretreatment[hasradiotherapypretreatment=="nd"] = NA
+  hasradiotherapypretreatment = as.factor(hasradiotherapypretreatment)
+  treatmentGroup = factor(treatmentGroup, levels = c("Doublet", "NULL","Mono", "Triplet", "Targeted", "Trastuzumab containing"))
+  trastuzumab_containing = NA
+  trastuzumab_containing[data$info$treatmentGroup!="Trastuzumab containing"] = "No"
+  trastuzumab_containing[data$info$treatmentGroup=="Trastuzumab containing"] = "Yes"
+  firstresponse[firstresponse=="nd"] = NA
+  firstresponse = factor(firstresponse, levels = c("pd", "sd", "non-cr_non-pd" ,"pr", "cr"))
+  orr.firstresponse = recode(firstresponse, "pd" = "non-responder", "sd" = "non-responder", "non-cr_non-pd" = "non-responder" ,"pr" = "responder", "cr" = "responder")
+  cbr.firstresponse = recode(firstresponse, "pd" = "non-controlled", "sd" = "controlled", "non-cr_non-pd" = "controlled" ,"pr" = "controlled", "cr" = "controlled")
+  treatment.dup1 = NULL
+  treatment.dup2 = NULL
+  dings_km = factor(dings_km, levels = c("IL", "ML"))
+  dings = NULL
+  dings_num = NULL
+  MLscore = f01/(f01+f03)
+  tumorpurity.mRNA = f01+f03 
+  age = as.numeric(substr(data$info$biopsydate, start = 0, stop =4)) - data$info$birthyear
+})
+```
+
+```{r}
+recist.original = read.delim("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/PEGASUS RECIST/original/recist_full.csv", sep = ",")
+length(recist.original$patientId[!duplicated(recist.original$patientId)])
+recist.original$patientId = tolower(recist.original$patientId)
+recist.original = recist.original[recist.original$itemGroupKey==0,] ## only summary data, not per lesion
+recist.original = recist.original[recist.original$formKey<=2,] ## only first response
+recist.original$item = paste0(recist.original$formKey,".",recist.original$item)
+recist.transpose = dcast(recist.original, patientId ~ item)
+recist.transpose$`1.FLD.TUMORMEASUREMENT.SUMDIAMETER` = as.numeric(recist.transpose$`1.FLD.TUMORMEASUREMENT.SUMDIAMETER`)
+recist.transpose$`2.FLD.TUMORMEASUREMENT.SUMDIAMETER` = as.numeric(recist.transpose$`2.FLD.TUMORMEASUREMENT.SUMDIAMETER`)
+recist.transpose$response = ((recist.transpose$`2.FLD.TUMORMEASUREMENT.SUMDIAMETER`/recist.transpose$`1.FLD.TUMORMEASUREMENT.SUMDIAMETER`)*100)-100
+recist.minimal = data.frame(recist.patientId = recist.transpose$patientId,
+                            recist.firstresponse = recist.transpose$`2.FLD.TUMORMEASUREMENT.BESTRESPON`,
+                            recist.diameter = recist.transpose$response)
+data$info = merge(x=data$info, y=recist.minimal, by.x = "cp_link_r2_sample", by.y="recist.patientId", all.x = TRUE)
+
+data$info = within(data$info, {
+  recist.firstresponse[recist.firstresponse=="ND"] = NA
+  recist.firstresponse[recist.firstresponse=="NE"] = NA
+  recist.firstresponse = as.factor(tolower(recist.firstresponse))
+  recist.firstresponse = factor(recist.firstresponse, levels = c("clinical progression","pd", "sd", "non-cr/non-pd" ,"pr", "cr"))
+  recist.firstresponse = recode(recist.firstresponse, "clinical progression"="pd")
+  orr.recist.diameter = NA
+  orr.recist.diameter[recist.diameter >= 0 ] = "non-responder"
+  orr.recist.diameter[recist.diameter < 0 ] = "responder"
+})
+
+colnames(data$info)
+```
+
+
+```{r}
+rownames(data$info) = data$info$sample_id
+```
+
+
+```{r}
+ph.colors= list(biopsysite.simplified = c(primary = "grey", liver = "#CD9BBC", lymph_node = "#7EAED3", abdomen = "#73BA68", adrenal_gland = "#EFDBBD", breast = "pink", thoracic_wall = "#C26D43", bone = "#EDC947", soft_tissue = "#F7E094", skin = "#E1A260", unknown = "white"),
+                primarytumorlocation = c(esophagus = "#499894", stomach = "#79706E"),
+                dings_km = c(IL = "#4E79A7", ML = "#E15759"))
+
+
+palettes <-
+  ggthemes_data[["tableau"]][["color-palettes"]][["ordered-sequential"]]
+palette=tableau_seq_gradient_pal("Classic Gray")(seq(0, 1, length = 200))
+p=pheatmap(t(sampleWeights),
+         cluster_rows = F,
+         cluster_cols = T,
+         clustering_method = "ward.D2",
+         annotation_col = data$info[,c(17,58,29),drop=F], #17 is primarytumorlocation
+         annotation_colors = ph.colors,
+         palette
+         )
+p ## print PDF 7.4 x 4
+chisq.test(data$info$dings_km, data$info$biopsysite.simplified,simulate.p.value = TRUE)
+fisher.test(data$info$dings_km, data$info$biopsysite.simplified)
+prop.table(table(data$info$dings_km, data$info$biopsysite.simplified),1)
+fisher.test(data$info$dings_km,data$info$hasradiotherapypretreatment)
+```
+
+```{r}
+ggplot(data$info, aes(x=f01, y=f03, color=data$info$dings_km)) + 
+  geom_point()
+```
+
+```{r}
+plot.purity = ggplot(data$info, aes(x = dings_km, y = tumorpurity, fill = dings_km)) +
+  geom_boxplot() +
+  geom_beeswarm(cex = 3) +
+  scale_fill_manual(breaks = c("IL", "ML"), 
+                    values=c("#4E79A7", "#E15759")) +
+  stat_compare_means(method = "t.test") +
+  xlab("") + 
+  ylab("Tumor purity (DNA)")+
+  theme_classic()+ theme(legend.position = "none")
+
+#pdf("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/eac.pegasus.purity.by.subtype.pdf", width = 2.5, height = 4)
+print(plot.purity)
+#dev.off()
+```
+
+
+```{r}
+p = ggplot(data$info, aes(x=f01, y=f03, color=data$info$hasradiotherapypretreatment)) + 
+  geom_point()
+p
+ggMarginal(p, groupColour = TRUE, groupFill = TRUE)
+
+ggplot(data$info, aes(y=f01/(f01+f03), x=data$info$hasradiotherapypretreatment)) + 
+  geom_boxplot()
+
+ggplot(data$info, aes(y=f05, x=data$info$biopsysite.simplified)) + 
+  geom_point()
+```
+
+```{r}
+p=ggplot(data$info,aes(x=tumorpurity.mRNA, y=tumorpurity))+geom_point()+geom_smooth(method = lm)+stat_cor()+theme_classic()
+p
+
+ggplot(data$info,aes(x=tumorpurity.mRNA, y=tumorpurity, label=sample_id))+geom_point(aes(color="grey"))+geom_smooth(method = lm)+stat_cor()+theme_classic()+geom_text()
+```
+
+```{r}
+baseline.table = data.frame(
+  data$info$sample_id,
+  data$info$gender,
+  data$info$age,
+  data$info$primarytumorlocation,
+  data$info$hassystemicpretreatment,
+  data$info$hasradiotherapypretreatment,
+  data$info$treatment,
+  data$info$trastuzumab_containing,
+  data$info$firstresponse,
+  data$info$recist.diameter,
+  data$info$dings_km
+)
+
+colnames(baseline.table) = c(
+  "Sample.ID",
+  "Sex",
+  "Age",
+  "primarytumorlocation",
+  "hassystemicpretreatment",
+  "hasradiotherapypretreatment",
+  "treatment",
+  "trastuzumab_containing",
+  "firstresponse",
+  "recist.diameter",
+  "dings_km"
+)
+
+baseline.table = within(baseline.table, {
+  hassystemicpretreatment[hassystemicpretreatment=="nd"] = NA
+  hasradiotherapypretreatment[hasradiotherapypretreatment=="nd"] = NA
+})
+
+the_table <- atable::atable(baseline.table,
+                            target_cols = c(
+  "Sex",
+  "Age",
+  "primarytumorlocation",
+  "hassystemicpretreatment",
+  "hasradiotherapypretreatment",
+  "treatment",
+  "trastuzumab_containing",
+  "firstresponse",
+  "recist.diameter",
+  "dings_km"
+                            ))
+the_table
+
+knitr::kable(the_table)
+```
+
+```{r}
+the_table <- atable::atable(baseline.table,
+                            target_cols = c(
+                              "Sex",
+                              "Age",
+                              "primarytumorlocation",
+                              "hassystemicpretreatment",
+                              "hasradiotherapypretreatment",
+                              "treatment",
+                              "trastuzumab_containing",
+                              "firstresponse",
+                              "recist.diameter"
+                            ),
+                            group_col = "dings_km")
+the_table
+knitr::kable(the_table)
+```
+
+```{r}
+#double-check firstresponse
+df = data.frame(c(7,9,1,13,0), c(6,7,0,0,1))
+fisher.test(df)
+chisq.test(df)
+```
+
+
+```{r}
+#ordinal logistic regression using firstresponse (recist data from HMF in first metadata file)
+m <- data$info %>%
+  MASS::polr(firstresponse ~ dings_km, data=. , Hess=TRUE)
+summary(m)
+ctable <- coef(summary(m))
+p <- pnorm(abs(ctable[, "t value"]), lower.tail = FALSE) * 2
+ctable <- cbind(ctable, "p value" = p)
+ctable
+```
+
+```{r}
+#ordinal logistic regression using recist.firstresponse (recist data from HMF in second metadata file, with all the raw RECIST)
+m <- data$info %>%
+  MASS::polr(recist.firstresponse ~ dings_km, data=. , Hess=TRUE)
+summary(m)
+ctable <- coef(summary(m))
+p <- pnorm(abs(ctable[, "t value"]), lower.tail = FALSE) * 2
+ctable <- cbind(ctable, "p value" = p)
+ctable
+```
+
+```{r}
+#different outcome measures
+fisher.test(data$info$dings_km, data$info$firstresponse)
+table(data$info$dings_km, data$info$firstresponse)
+fisher.test(data$info$dings_km, data$info$orr.firstresponse)
+table(data$info$dings_km, data$info$orr.firstresponse)
+fisher.test(data$info$dings_km, data$info$cbr.firstresponse)
+table(data$info$dings_km, data$info$cbr.firstresponse)
+```
+
+```{r}
+p <- data$info %>%
+  mutate(cp_link_r2_sample = fct_reorder(cp_link_r2_sample, dplyr::desc(recist.diameter))) %>%
+  droplevels() %>%
+  filter(!is.na(recist.diameter) & !is.na(firstresponse)) %>%
+  ggplot(aes(x=cp_link_r2_sample,y=recist.diameter, color=dings_km, shape = firstresponse))+
+  geom_point(size=3, aes(fill = dings_km))+
+  scale_shape_manual(values = c(24, 21, 25)) +
+  scale_color_manual(values=c(IL = "#4E79A7", ML = "#E15759"))+
+  scale_fill_manual(values=c(IL = "#4E79A7", ML = "#E15759"))+
+  geom_segment(aes(xend = cp_link_r2_sample, y = 0, yend = recist.diameter), linetype = 1, size = 2)+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  geom_hline(yintercept=20,  col = 'black')+
+  geom_hline(yintercept=0,  col = 'black')+
+  geom_hline(yintercept=-30,  col = 'black')+
+  ggtitle("All treatments")
+## export pdf 7.48 x 3.90, name: waterfall plot all treatments
+p
+
+p0 <- data$info %>%
+  mutate(cp_link_r2_sample = fct_reorder(cp_link_r2_sample, dplyr::desc(recist.diameter))) %>%
+  droplevels() %>%
+  filter(!is.na(recist.diameter) & !is.na(firstresponse)) %>%
+  ggplot(aes(x=cp_link_r2_sample,y=recist.diameter, color=dings_km))+
+  scale_color_manual(values=c(IL = "#4E79A7", ML = "#E15759"))+
+  scale_fill_manual(values=c(IL = "#4E79A7", ML = "#E15759"))+
+  geom_segment(aes(xend = cp_link_r2_sample, y = 0, yend = recist.diameter), linetype = 1, size = 2)+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  geom_hline(yintercept=20,  col = 'black')+
+  geom_hline(yintercept=0,  col = 'black')+
+  geom_hline(yintercept=-30,  col = 'black')+
+  ggtitle("All treatments")
+## export pdf 7.48 x 3.90, name: waterfall plot all treatments
+```
+
+```{r}
+##Recist score in relation with trastuzumab_containing treatments
+extra = data$info
+exp = as.data.frame(t(data$expression_set))
+exp = exp %>%
+  select("EGFR", "ERBB2", "ERBB3", "ERBB4")
+extra = merge(x=extra, y=exp, by=0)
+
+ggplot(extra, aes(x=dings_km, y = ERBB2, color=dings_km)) + geom_boxplot()+ stat_compare_means(method = "t.test")
+ggplot(extra, aes(x=dings_km, y = ERBB3, color=dings_km)) + geom_boxplot()+ stat_compare_means(method = "t.test")
+ggplot(extra, aes(x=trastuzumab_containing, y = ERBB2, color=dings_km)) + geom_boxplot()
+
+extra %>%
+  filter(trastuzumab_containing=="Yes") %>%
+  ggplot(aes(x=recist.diameter, y=ERBB2, color = dings_km, shape=firstresponse, fill=dings_km)) + geom_point()+scale_shape_manual(values = c(24, 21, 25))+  scale_color_manual(values=c(IL = "#4E79A7", ML = "#E15759"))+
+  scale_fill_manual(values=c(IL = "#4E79A7", ML = "#E15759"))
+
+extra %>%
+  filter(trastuzumab_containing=="Yes") %>%
+  ggplot(aes(y=ERBB2, color = dings_km, x=firstresponse)) + geom_point()+scale_shape_manual(values = c(24, 21, 25))
+
+data$info %>%
+  filter(trastuzumab_containing=="Yes") %>%
+  mutate(cp_link_r2_sample = fct_reorder(cp_link_r2_sample, dplyr::desc(recist.diameter))) %>%
+  droplevels() %>%
+  filter(!is.na(recist.diameter) & !is.na(firstresponse)) %>%
+  ggplot(aes(x=cp_link_r2_sample,y=recist.diameter, color=dings_km, shape = firstresponse))+
+  geom_point(size=3, aes(fill = dings_km))+
+  scale_shape_manual(values = c(24, 21, 25)) +
+  scale_color_manual(values=c(IL = "#4E79A7", ML = "#E15759"))+
+  scale_fill_manual(values=c(IL = "#4E79A7", ML = "#E15759"))+
+  geom_segment(aes(xend = cp_link_r2_sample, y = 0, yend = recist.diameter), linetype = 1, size = 2)+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  geom_hline(yintercept=20,  col = 'black')+
+  geom_hline(yintercept=0,  col = 'black')+
+  geom_hline(yintercept=-30,  col = 'black')+
+  ggtitle("Trastuzumab containing")
+
+## End intermezzo
+```
+
+
+```{r}
+#density plot
+ggplot(data$info, aes(x=recist.diameter)) +
+  geom_density()
+#% change (recist diameter) is not normally distributed
+data$info$recist.diameter[is.nan(data$info$recist.diameter)]=NA
+wide = data$info %>%
+  select(cp_link_r2_sample,dings_km, recist.diameter) %>%
+  spread(dings_km, recist.diameter)
+wilcox.test(na.omit(wide$IL), na.omit(wide$ML))
+median(na.omit(wide$IL))
+median(na.omit(wide$ML))
+t.test(na.omit(wide$IL), na.omit(wide$ML))
+```
+```{r}
+explanatory <- c( 
+  "gender",
+  "age",
+  "primarytumorlocation",
+  "hassystemicpretreatment",
+  "hasradiotherapypretreatment",
+  "treatmentGroup",
+  "trastuzumab_containing",
+  "dings_km"
+  )
+explanatory_multi <- c(         "age",
+                                "treatmentGroup",
+                                "hassystemicpretreatment",
+                                "dings_km"
+  )
+dependent = "Surv(as.numeric(OS_biopsydate), death)"
+data$info %>%
+  finalfit::finalfit(dependent, explanatory,explanatory_multi = explanatory_multi) -> t1
+knitr::kable(t1, row.names=FALSE, align=c("l", "l", "r", "r", "r", "r"))
+
+```
+
+```{r}
+explanatory <- c(                 
+  "gender",
+  "age",
+  "primarytumorlocation",
+  "hassystemicpretreatment",
+  "hasradiotherapypretreatment",
+  "treatmentGroup",
+  "trastuzumab_containing",
+  "dings_km"
+  )
+explanatory_multi <- c(         "primarytumorlocation",
+                                #"treatmentGroup",
+                                "dings_km"
+  )
+dependent = "Surv(as.numeric(PFS), as.numeric(PD))"
+data$info %>%
+  finalfit::finalfit(dependent, explanatory,explanatory_multi = explanatory_multi) -> t2
+knitr::kable(t2, row.names=FALSE, align=c("l", "l", "r", "r", "r", "r"))
+
+```
+
+```{r}
+
+```
+

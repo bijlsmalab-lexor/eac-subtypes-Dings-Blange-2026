@@ -1,0 +1,38 @@
+# R / RStudio
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+.Renviron
+
+# renv (uncomment if used)
+# renv/library/
+# renv/local/
+# renv/staging/
+
+# Data objects (not shared here — see README Data availability)
+*.rds
+*.RDS
+*.RData
+*.rda
+*.h5
+*.h5ad
+*.loom
+*.mtx
+*.bam
+*.bai
+*.fastq
+*.fastq.gz
+
+# Large / intermediate tables (add specific exceptions with !filename if needed)
+*.csv
+*.tsv
+*.xlsx
+*.xls
+
+# Caches and knit artifacts
+*_cache/
+*_files/
+.DS_Store
+Thumbs.db

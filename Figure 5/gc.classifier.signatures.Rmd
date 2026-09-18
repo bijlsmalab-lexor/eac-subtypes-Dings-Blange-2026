@@ -1,0 +1,298 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+library(rmatio)
+library(viridis)
+library(pheatmap)
+library(ggpubr)
+library(gridExtra)
+library(ggplot2)
+library(ggthemes)
+library(ggdendro)
+library(ConsensusClusterPlus)
+library(tidyr)
+library(tidyverse)
+library(dplyr)
+library(reshape2)
+library(org.Hs.eg.db)
+library(fgsea)
+library(limma)
+```
+
+```{r}
+compute_boxplot_stats_multi <- function(df, group_cols, value_col = "value") {
+  df %>%
+    group_by(across(all_of(group_cols))) %>%
+    summarise(
+      n            = sum(!is.na(.data[[value_col]])),
+      min          = min(.data[[value_col]], na.rm = TRUE),
+      q25          = quantile(.data[[value_col]], 0.25, na.rm = TRUE),
+      median       = median(.data[[value_col]], na.rm = TRUE),
+      q75          = quantile(.data[[value_col]], 0.75, na.rm = TRUE),
+      max          = max(.data[[value_col]], na.rm = TRUE),
+      whisker_low  = min,   # full range, no Tukey trimming
+      whisker_high = max,
+      .groups = "drop"
+    )
+}
+```
+
+
+```{r}
+setwd("/Users/markdings/Documents/PhD/Scripts")
+load("decoder_eacZalm6/eac.bijlsma.186.s4b.Rda")
+
+eset = data$expression_set
+list.coph = list()
+for (i in c(2:11)) {
+  a = i-1
+  if (!file.exists(paste0("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/K",i, "_res.mat"))) {
+    list.coph[[a]] = 0
+  } else {
+  ds = read.mat(paste0("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/K",i, "_res.mat"))
+  list.coph[[a]] = ds$coph
+  }
+}
+
+plot(x = 3:11, y = list.coph[2:length(list.coph)], type = "o")
+
+```
+
+
+```{r}
+k=7
+ds = read.mat(paste0("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6//K",k, "_res.mat"))
+
+pats.char = read.delim(file="/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/Annotation_BiOESN186_Mark.txt")
+
+pats.char$samplenameR2 = tolower(pats.char$samplenameR2)
+data$info = merge(data$info, pats.char, by.x = "sample_id", by.y = "samplenameR2",all.x = TRUE)
+
+rownames(ds$genesigs) = rownames(eset)
+features <- c(sprintf("f%02d", seq(1,ncol(ds$genesigs))))
+colnames(ds$genesigs) <- features
+rm(features)
+
+colnames(ds$samplesigs) = colnames(eset)
+samplesigs = as.data.frame(t(ds$samplesigs))
+colnames(samplesigs) = c("f01", "f02", "f03", "f04", "f05", "f06", "f07")
+samplesigs$MLscore = samplesigs$f01/(samplesigs$f01+samplesigs$f03)
+data$info = merge(y=data$info, x=samplesigs, by.y = "sample_id", by.x = 0,all.y = TRUE)
+data$info = data$info[,!names(data$info) %in% c("batch", "group", "group1", "id", "labid1", "pt_id", "histology", "specimen", "InVitroCR")]
+rownames(data$info) = data$info$Row.names
+data$info$Row.names = NULL
+table = ds$samplesigs
+```
+
+```{r}
+### Determine the examplar genes for each factor/signature
+factor = apply(ds$genesigs, 1, function(x) which.max(x))
+ds$genesigs = cbind(factor,ds$genesigs)
+rm(factor)
+
+list.topGenes = lapply(2:ncol(ds$genesigs), function(f) {
+  i = f-1
+  print(i)
+  temp = ds$genesigs[ds$genesigs[,1] == i,]
+  distance = data.frame(dist = rep(0, nrow(temp)))
+  temp = as.data.frame(cbind(distance, temp))
+  
+  featuresMatrix = temp[,3:dim(temp)[2]]
+  
+  dists <- apply(featuresMatrix, 1, function(gene_weights) {
+    maxWeight = max(gene_weights)
+    secMaxWeight = max(gene_weights[gene_weights < maxWeight])
+    maxWeight - secMaxWeight
+  })
+  
+  temp$dist <- dists
+  temp = temp[order(-temp$dist), , drop = FALSE]
+  feature.top250 = rownames(temp)[1:250]
+  as.data.frame(c(feature.top250))
+})
+```
+
+Oh subtype signatures
+```{r}
+sig.Oh = read.delim(file="/Users/markdings/Documents/PhD/Scripts/PanGI_Network_analysis/classification/classification.by.Oh/41467_2018_4179_MOESM4_ESM_gene_sig.txt")
+
+sig.Oh = sig.Oh[sig.Oh$Symbol %in% rownames(ds$genesigs) ,]
+sig.Oh$class = "NA"; 
+sig.Oh$class[sig.Oh$S.L.ratios..log2.<0] = "EP"
+sig.Oh$class[sig.Oh$S.L.ratios..log2.>0] = "MP"
+sig.Oh$class = factor(sig.Oh$class, levels = c("MP", "EP"))
+
+sig.Oh$meta.class = "NA"
+sig.Oh$meta.class[sig.Oh$class=="MP"] = "Mesenchymal"
+sig.Oh$meta.class[sig.Oh$class=="EP"] = "Epithelial"
+
+sig.Oh = merge(x = sig.Oh, y = ds$genesigs, by.x = "Symbol", by.y = 0)
+sig.Oh = sig.Oh %>%
+  dplyr::select(Symbol, class, meta.class, f01, f02, f03, f04, f05, f06, f07)
+
+sig.Oh.long = melt(sig.Oh, id.vars = c("Symbol", "class", "meta.class"), measure.vars = c("f01", "f02", "f03", "f04", "f05", "f06", "f07"))
+
+ggplot(sig.Oh.long, aes(x=variable, y=value, fill=class))+geom_boxplot()+scale_fill_manual(values=c(MP="#4f6980",EP="#849db1"))+theme_classic()
+
+p1=ggplot(sig.Oh.long, aes(x=class, y=value, fill=variable))+geom_boxplot(show.legend = FALSE, outlier.shape = NA)+scale_fill_manual(values=c(f01="#E15759",f03="#4E79A7", f04 = "#ffaa0e"))+theme_classic()+geom_hline(yintercept=1)
+p1
+```
+
+Rozen subtype signatures
+```{r}
+inv.vs.pro.feature <- read.delim("/Users/markdings/Documents/PhD/Scripts/pan_gi_clustering/classification.by.Rozen/NTP/NTP_pairwise_features_Inv_vs_Pro_genename_unique.txt")
+inv.vs.pro.feature$class = "NA"
+inv.vs.pro.feature$class[inv.vs.pro.feature$Inv1_Pro2==1] = "Inv"
+inv.vs.pro.feature$class[inv.vs.pro.feature$Inv1_Pro2==2] = "Pro"
+inv.vs.pro.feature$Inv1_Pro2 = NULL
+inv.vs.meta.feature <- read.delim("/Users/markdings/Documents/PhD/Scripts/pan_gi_clustering/classification.by.Rozen/NTP/NTP_pairwise_features_Inv_vs_Met_genename_unique.txt")
+inv.vs.meta.feature$class = "NA"
+inv.vs.meta.feature$class[inv.vs.meta.feature$Inv1_Meta2==1] = "Inv"
+inv.vs.meta.feature$class[inv.vs.meta.feature$Inv1_Meta2==2] = "Meta"
+inv.vs.meta.feature$Inv1_Meta2 = NULL
+pro.vs.meta.feature <- read.delim("/Users/markdings/Documents/PhD/Scripts/pan_gi_clustering/classification.by.Rozen/NTP/NTP_pairwise_features_Pro_vs_Met_genename_unique.txt")
+pro.vs.meta.feature$class = "NA"
+pro.vs.meta.feature$class[pro.vs.meta.feature$Pro1_Meta2==1] = "Pro"
+pro.vs.meta.feature$class[pro.vs.meta.feature$Pro1_Meta2==2] = "Pro"
+pro.vs.meta.feature$Pro1_Meta2 = NULL
+
+
+sig.Rozen = rbind(inv.vs.pro.feature, inv.vs.meta.feature)
+sig.Rozen = rbind(sig.Rozen, pro.vs.meta.feature)
+  
+sig.Rozen = sig.Rozen[sig.Rozen$GeneName %in% rownames(ds$genesigs) ,]
+
+sig.Rozen$meta.class = "NA"
+sig.Rozen$meta.class[sig.Rozen$class=="Inv"] = "Mesenchymal"
+sig.Rozen$meta.class[sig.Rozen$class=="Meta"] = "Epithelial"
+sig.Rozen$meta.class[sig.Rozen$class=="Pro"] = "Epithelial"
+
+sig.Rozen = merge(x = sig.Rozen, y = ds$genesigs, by.x = "GeneName", by.y = 0)
+sig.Rozen = sig.Rozen %>%
+  dplyr::select(GeneName, class, meta.class, f01, f02, f03, f04, f05, f06, f07)
+
+sig.Rozen.long = melt(sig.Rozen, id.vars = c("GeneName", "class", "meta.class"), measure.vars = c("f01", "f02", "f03", "f04", "f05", "f06", "f07"))
+
+ggplot(sig.Rozen.long, aes(x=variable, y=value, fill=class))+geom_boxplot()+scale_fill_manual(values=c(MP="#4f6980",EP="#849db1"))+theme_classic()
+
+p2=ggplot(sig.Rozen.long, aes(x=class, y=value, fill=variable))+geom_boxplot(show.legend = FALSE,outlier.shape = NA)+scale_fill_manual(values=c(f01="#E15759",f03="#4E79A7", f04 = "#ffaa0e"))+theme_classic()+scale_y_continuous(limits = c(0,3))+geom_hline(yintercept=1)
+p2
+```
+
+Tan subtype signatures
+```{r}
+sig.Tan = read.delim(file="/Users/markdings/Documents/PhD/Scripts/PanGI_Network_analysis/classification/classification.by.Tan/Tan_set_171_genesig.txt")
+
+sig.Tan = sig.Tan[sig.Tan$Symbol %in% rownames(ds$genesigs) ,]
+sig.Tan$class = sig.Tan$subtype
+
+sig.Tan$meta.class = "NA"
+sig.Tan$meta.class[sig.Tan$class=="G-DIF"] = "Mesenchymal"
+sig.Tan$meta.class[sig.Tan$class=="G-INT"] = "Epithelial"
+
+sig.Tan = merge(x = sig.Tan, y = ds$genesigs, by.x = "Symbol", by.y = 0)
+sig.Tan = sig.Tan %>%
+  dplyr::select(Symbol, class, meta.class, f01, f02, f03, f04, f05, f06, f07)
+
+sig.Tan.long = melt(sig.Tan, id.vars = c("Symbol", "class", "meta.class"), measure.vars = c("f01", "f02", "f03", "f04", "f05", "f06", "f07"))
+
+ggplot(sig.Tan.long, aes(x=variable, y=value, fill=class))+geom_boxplot()+scale_fill_manual(values=c(MP="#4f6980",EP="#849db1"))+theme_classic()
+
+p3=ggplot(sig.Tan.long, aes(x=class, y=value, fill=variable))+geom_boxplot(show.legend = FALSE,outlier.shape = NA)+scale_fill_manual(values=c(f01="#E15759",f03="#4E79A7", f04 = "#ffaa0e"))+theme_classic()+geom_hline(yintercept=1)
+p3
+```
+Comparison plot our signature
+```{r}
+sig.dings1 = read.csv("/Users/markdings/Documents/PhD/Scripts/PanGI_Network_analysis/classification/classification.by.Dings.eacZalm6/signatureGene.feature1.txt")
+sig.dings2 = read.csv("/Users/markdings/Documents/PhD/Scripts/PanGI_Network_analysis/classification/classification.by.Dings.eacZalm6/signatureGene.feature3.txt")
+sig.dings = rbind(sig.dings1[1:50,2,drop=F], sig.dings2[1:50,2,drop=F])
+colnames(sig.dings) = "Genes"
+rownames(sig.dings) = sig.dings$Genes
+sig.dings$class = "NULL"
+sig.dings$class[1:50] = "ML"
+sig.dings$class[51:100] = "IL"
+sig.dings$class = factor(sig.dings$class, levels = c("ML", "IL"))
+
+sig.dings$meta.class = "NA"
+sig.dings$meta.class[sig.dings$class=="ML"] = "Mesenchymal"
+sig.dings$meta.class[sig.dings$class=="IL"] = "Epithelial"
+
+sig.dings = sig.dings[sig.dings$Genes %in% rownames(ds$genesigs) ,]
+
+sig.dings = merge(x = sig.dings, y = ds$genesigs, by.x = "Genes", by.y = 0)
+sig.dings = sig.dings %>%
+  dplyr::select(Genes, class, meta.class, f01, f02, f03, f04, f05, f06, f07)
+
+sig.dings.long = melt(sig.dings, id.vars = c("Genes", "class", "meta.class"), measure.vars = c("f01", "f02", "f03", "f04", "f05", "f06", "f07"))
+
+ggplot(sig.dings.long, aes(x=variable, y=value, fill=class))+geom_boxplot()+scale_fill_manual(values=c(MP="#4f6980",EP="#849db1"))+theme_classic()
+
+p4=ggplot(sig.dings.long, aes(x=class, y=value, fill=variable))+geom_boxplot(show.legend = FALSE,outlier.shape = NA)+scale_fill_manual(values=c(f01="#E15759",f03="#4E79A7", f04 = "#ffaa0e"))+theme_classic()+geom_hline(yintercept=1)
+p4
+```
+
+
+```{r}
+top_row = cowplot::plot_grid(p1,p3)
+cowplot::plot_grid(top_row,p2, ncol = 1, rel_heights = c(3,3))
+```
+```{r}
+top_row = cowplot::plot_grid(p1,p3)
+bottom_row = cowplot::plot_grid(p4,p2, rel_widths = c(1,2))
+plot = cowplot::plot_grid(bottom_row,top_row, ncol = 1)
+
+#pdf("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/gc.classifier.comparison.pdf", height = 5, width = 8)
+print(plot)
+#dev.off()
+```
+```{r}
+colnames(sig.Oh.long)[1] = "Genes"
+colnames(sig.Rozen.long)[1] = "Genes"
+colnames(sig.Tan.long)[1] = "Genes"
+colnames(sig.dings.long)[1] = "Genes"
+
+sigs = rbind(sig.Oh.long,sig.Rozen.long)
+sigs = rbind(sigs,sig.Tan.long)
+sigs = rbind(sigs,sig.dings.long)
+
+sigs$variable = recode(sigs$variable, f01 = "Tumor \n Mesenchymal", f02 = "Cryptogenic", f03 = "Tumor \n Intestinal", f04 = "Stroma \n Mesenchymal", f05 = "Squamous", f06 = "Immune", f07 = "Liver")
+
+plot2 = ggplot(sigs, aes(x=class, y=value, fill = class))+facet_grid(variable ~ meta.class,drop = TRUE,scales = "free_x")+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter(color="black", size=0.1, alpha=0.1)+
+  scale_y_continuous(limits = c(0,3))+
+  #scale_fill_manual(values = c(Inv="#b66353",Meta="#fbb04e",Pro="#f47942", `G-INT` = "#a2ceaa", `G-DIF` = "#638b66",MP="#4f6980",EP="#849db1",IL="#4E79A7",ML="#E15759"))
+scale_fill_manual(values = c(Inv="#fbb04e",Meta="#fbb04e",Pro="#fbb04e", `G-INT` = "#638b66", `G-DIF` = "#638b66",MP="#849db1",EP="#849db1",IL="#E15759",ML="#E15759"))+
+  geom_hline(yintercept = 1)+theme_classic()+ 
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1))+
+  xlab("")+
+  ylab("Factor weights")
+
+#pdf("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/gc.classifier.comparison.perMetaclass2.pdf", height = 8, width = 3.6)
+print(plot2)
+#dev.off()
+#write.csv(x = sigs, file = "/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/gc.classifier.comparison.perMetaclass2.data.csv")
+```
+
+```{r}
+# Per-box summary stats (variable x meta.class x class), full data range
+sigs_boxstats <- compute_boxplot_stats_multi(
+  sigs,
+  group_cols = c("variable", "meta.class", "class"),
+  value_col  = "value"
+)
+
+write.csv(
+  sigs_boxstats,
+  file = "/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/gc.classifier.comparison.perMetaclass2_boxstats.csv",
+  row.names = FALSE
+)
+```
+

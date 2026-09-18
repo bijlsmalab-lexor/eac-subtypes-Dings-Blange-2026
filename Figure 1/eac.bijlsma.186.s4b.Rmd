@@ -1,0 +1,1305 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+library(rmatio)
+library(viridis)
+library(pheatmap)
+library(ggpubr)
+library(gridExtra)
+library(ggplot2)
+library(ggthemes)
+library(ggdendro)
+library(ConsensusClusterPlus)
+library(tidyr)
+library(tidyverse)
+library(dplyr)
+library(reshape2)
+library(org.Hs.eg.db)
+library(fgsea)
+library(limma)
+library(cowplot)
+
+
+setwd("/Users/markdings/Documents/PhD/Scripts")
+load("decoder_eacZalm6/eac.bijlsma.186.s4b.Rda")
+
+eset = data$expression_set
+list.coph = list()
+for (i in c(2:11)) {
+  a = i-1
+  if (!file.exists(paste0("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/K",i, "_res.mat"))) {
+    list.coph[[a]] = 0
+  } else {
+  ds = read.mat(paste0("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/K",i, "_res.mat"))
+  list.coph[[a]] = ds$coph
+  }
+}
+
+plot(x = 3:11, y = list.coph[2:length(list.coph)], type = "o")
+
+```
+
+
+```{r}
+k=7
+ds = read.mat(paste0("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6//K",k, "_res.mat"))
+
+pats.char = read.delim(file="/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/Annotation_BiOESN186_Mark.txt")
+
+pats.char$samplenameR2 = tolower(pats.char$samplenameR2)
+data$info = merge(data$info, pats.char, by.x = "sample_id", by.y = "samplenameR2",all.x = TRUE)
+
+rownames(ds$genesigs) = rownames(eset)
+features <- c(sprintf("f%02d", seq(1,ncol(ds$genesigs))))
+colnames(ds$genesigs) <- features
+rm(features)
+
+colnames(ds$samplesigs) = colnames(eset)
+samplesigs = as.data.frame(t(ds$samplesigs))
+colnames(samplesigs) = c("f01", "f02", "f03", "f04", "f05", "f06", "f07")
+samplesigs$MLscore = samplesigs$f01/(samplesigs$f01+samplesigs$f03)
+data$info = merge(y=data$info, x=samplesigs, by.y = "sample_id", by.x = 0,all.y = TRUE)
+data$info = data$info[,!names(data$info) %in% c("batch", "group", "group1", "id", "labid1", "pt_id", "histology", "specimen", "InVitroCR")]
+rownames(data$info) = data$info$Row.names
+data$info$Row.names = NULL
+table = ds$samplesigs
+```
+
+```{r}
+### Determine the examplar genes for each factor/signature
+factor = apply(ds$genesigs, 1, function(x) which.max(x))
+ds$genesigs = cbind(factor,ds$genesigs)
+rm(factor)
+
+list.topGenes = lapply(2:ncol(ds$genesigs), function(f) {
+  i = f-1
+  print(i)
+  temp = ds$genesigs[ds$genesigs[,1] == i,]
+  distance = data.frame(dist = rep(0, nrow(temp)))
+  temp = as.data.frame(cbind(distance, temp))
+  
+  featuresMatrix = temp[,3:dim(temp)[2]]
+  
+  dists <- apply(featuresMatrix, 1, function(gene_weights) {
+    maxWeight = max(gene_weights)
+    secMaxWeight = max(gene_weights[gene_weights < maxWeight])
+    maxWeight - secMaxWeight
+  })
+  
+  temp$dist <- dists
+  temp = temp[order(-temp$dist), , drop = FALSE]
+  feature.top250 = rownames(temp)[1:250]
+  as.data.frame(c(feature.top250))
+})
+```
+
+```{r}
+out <- as.data.frame(ds$samples)
+rownames(out) <- paste0("sig", rownames(out))
+write.table(file = "/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/NMF_sampleweights.tsv",
+            x = out, sep = "\t", col.names = NA)
+
+out <- as.data.frame(ds$genesigs)
+out <- out[, colnames(out) != "factor"]
+colnames(out) <- gsub("^f0*(\\d+)$", "sig\\1", colnames(out))
+
+write.table(file = "/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/NMF_geneweights.tsv",
+            x = out, sep = "\t", col.names = NA)
+```
+
+```{r}
+annotCol = data.frame(row.names = rownames(data$info), TumorType = c(data$info$TumorType), SpecimenType = c(data$info$SpecimenType))
+
+heatmap = data.frame(row.names = rownames(data$info), f01 = c(data$info$f01), f02 = c(data$info$f02), f03 = c(data$info$f03), f04 = c(data$info$f04), f05 = c(data$info$f05), f06 = c(data$info$f06), f07 = c(data$info$f07))
+heatmap = t(heatmap)
+
+ph.colors= list(SpecimenType = c(B = "#4E79A7", R="#F28E2B", M = "#59A14F", C = "#EDC948"),
+                TumorType = c(EAC = "#499894", ESC = "#E15759", GAC = "#79706E"))
+
+palettes <-
+  ggthemes_data[["tableau"]][["color-palettes"]][["ordered-sequential"]]
+palette=tableau_seq_gradient_pal("Classic Gray")(seq(0, 1, length = 200))
+
+p=pheatmap(heatmap,
+         cluster_rows = F,
+         cluster_cols = T,
+         #clustering_method = "ward.D2",
+         annotation_col = annotCol,
+         annotation_colors = ph.colors,
+         #gaps_col = 12,
+         palette,
+         show_colnames = F)
+p
+sampleOrder = colnames(heatmap[,p$tree_col[["order"]]])
+
+toOrder = sampleOrder
+toOrder = match(rownames(annotCol),toOrder)
+heatmap = heatmap[,order(toOrder)]
+annotCol = annotCol[order(toOrder),]
+```
+
+```{r}
+# Initialize empty list to collect plots
+plots <- list()
+
+# Unique specimen types
+specimen_types <- unique(data$info$SpecimenType)
+
+# Define pairwise comparisons
+my_comparisons <- list(c("EAC", "ESC"), c("ESC", "GAC"), c("EAC", "GAC"))
+
+# Loop over each SpecimenType and create plot
+for (stype in specimen_types) {
+  plot_data <- data.frame(
+    f01 = data$info$f01,
+    TumorType = data$info$TumorType,
+    SpecimenType = data$info$SpecimenType
+  ) %>%
+    filter(SpecimenType == stype)
+
+  plot_data$TumorType <- factor(plot_data$TumorType)
+
+  max_y <- max(plot_data$f01, na.rm = TRUE)
+
+  p <- ggplot(plot_data, aes(x = TumorType, y = f01, fill = TumorType)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+    geom_jitter(width = 0.2, alpha = 0.5) +
+    stat_compare_means(comparisons = my_comparisons, label.y = c(max_y * 1.05, max_y * 1.15, max_y * 1.25)) +
+    stat_compare_means(label.y = max_y * 1.35) +  # Global p-value
+    scale_fill_manual(values = ph.colors$TumorType) +
+    theme_minimal() +
+    labs(
+      title = paste0("f01 by Tumor Type - Specimen Type: ", stype),
+      y = "f01 Expression",
+      x = "Tumor Type"
+    )
+
+  plots[[stype]] <- p
+}
+
+# Arrange all plots in a grid
+plot_grid(plotlist = plots, ncol = 1)  # or ncol = 3 for side-by-side layout
+#pdf 16 x 4
+```
+
+```{r}
+maxCol = dim(heatmap)[2]
+maxRow = dim(heatmap)[1]
+pt_id = rep(colnames(heatmap) , maxRow)
+proportions = rep(0,length(pt_id))
+feature = paste0("f",1:length(pt_id))
+ggplot.df <- data.frame(pt_id,proportions,feature)
+head(ggplot.df$pt_id)
+
+ggplot.df$pt_id <- factor(ggplot.df$pt_id, levels = ggplot.df$pt_id[match( colnames(heatmap),ggplot.df$pt_id)])
+featureIndex = 1
+for (r in 1:maxRow) {
+  for (c in 1:maxCol) {
+    ggplot.df$proportions[(r-1)*maxCol+c] = heatmap[r,c]
+    ggplot.df$feature[(r-1)*maxCol+c] = paste0("f",featureIndex)
+    if (c == maxCol) {
+      featureIndex = featureIndex + 1
+    }
+  }
+}
+
+palettes <-
+  ggthemes_data[["tableau"]][["color-palettes"]][["ordered-sequential"]]
+palette=tableau_seq_gradient_pal("Blue")(seq(0, 1, length = 100))
+
+ggplot(ggplot.df, aes(fill=feature, y=proportions, x=pt_id)) + 
+  geom_bar(position="fill", stat="identity",width=1) +
+    theme_minimal()+
+  theme( # remove the vertical grid lines
+           panel.grid.major.x = element_blank() ,
+           panel.grid.major.y = element_blank())+
+  scale_fill_tableau(palette = "Tableau 10")
+
+ggplot(ggplot.df, aes(fill=feature, y=proportions, x=pt_id)) + 
+  geom_bar(, stat="identity",width=1) +
+  theme_minimal()+
+  theme( # remove the vertical grid lines
+           panel.grid.major.x = element_blank() ,
+           panel.grid.major.y = element_blank())+
+  scale_fill_tableau(palette = "Tableau 10")
+```
+
+```{r}
+library(gridExtra)
+library(ggplot2)
+
+## All correlations with ESTIMATE
+subset = data$info[data$info$TumorType!="ESC"& !is.na(data$info$TumorType) &data$info$SpecimenType!="C",]
+phenotype = data.frame(row.names = rownames(subset), TumorType = c(subset$TumorType), SpecimenType = c(subset$SpecimenType))
+samplesigs = data.frame(row.names = rownames(subset),sumf01f03 = c(subset$f01+subset$f03), f01 = c(subset$f01), f02 = c(subset$f02), f03 = c(subset$f03), f04 = c(subset$f04), f05 = c(subset$f05), f06 = c(subset$f06), f07 = c(subset$f07))
+samplesigs = t(samplesigs)
+
+## Tumor purity
+p <- list()
+for(i in 1:dim(samplesigs)[1]){
+  df = data.frame(x=samplesigs[i,],y=subset$TumorPurity)
+  p[[i]] <- ggscatter(df, x="x", y="y",
+                      color = "gray",
+                      add = "reg.line",
+                      add.params = list(color = "blue", fill = "lightgray"),
+                      conf.int = TRUE
+   
+   )+stat_cor(method = "pearson")
+}
+do.call(grid.arrange,p)
+
+df = data.frame(x=samplesigs[1,],y=subset$TumorPurity)
+p1=ggscatter(df, x="x", y="y",
+                    color = "gray",
+                    add = "reg.line",
+                    add.params = list(color = "#E52521", fill = "lightgray"),
+                    conf.int = TRUE
+                    
+)+stat_cor(method = "pearson")
+p1 = p1+xlab("Sig.1+Sig.3")+ylab("ESTIMATE: Purity score")
+
+## Stroma
+p=NULL
+p <- list()
+for(i in 1:dim(samplesigs)[1]){
+  df = data.frame(x=samplesigs[i,],y=subset$StromalScore)
+  p[[i]] <- ggscatter(df, x="x", y="y",
+                      color = "gray",
+                      add = "reg.line",
+                      add.params = list(color = "blue", fill = "lightgray"),
+                      conf.int = TRUE
+   
+   )+stat_cor(method = "pearson")
+}
+do.call(grid.arrange,p)
+
+df = data.frame(x=samplesigs[5,],y=subset$StromalScore)
+p2=ggscatter(df, x="x", y="y",
+                    color = "gray",
+                    add = "reg.line",
+                    add.params = list(color = "#E52521", fill = "lightgray"),
+                    conf.int = TRUE
+                    
+)+stat_cor(method = "pearson")
+p2 = p2+xlab("Sig.4")+ylab("ESTIMATE: Stroma")
+
+## Immune
+p=NULL
+p <- list()
+for(i in 1:dim(samplesigs)[1]){
+  df = data.frame(x=samplesigs[i,],y=subset$ImmuneScore)
+  p[[i]] <- ggscatter(df, x="x", y="y",
+                      color = "gray",
+                      add = "reg.line",
+                      add.params = list(color = "blue", fill = "lightgray"),
+                      conf.int = TRUE
+   
+   )+stat_cor(method = "pearson")
+}
+do.call(grid.arrange,p)
+
+df = data.frame(x=samplesigs[7,],y=subset$ImmuneScore)
+p3=ggscatter(df, x="x", y="y",
+                    color = "gray",
+                    add = "reg.line",
+                    add.params = list(color = "#E52521", fill = "lightgray"),
+                    conf.int = TRUE
+                    
+)+stat_cor(method = "pearson")
+p3 = p3+xlab("Sig.6")+ylab("ESTIMATE: Immune")
+
+# export pdf 3.0 x 7.66
+cowplot::plot_grid(p1, p2, p3 , ncol = 1, align = "hv")
+
+```
+
+```{r}
+subset = data$info[!is.na(data$info$TumorPercentage.Revised),]
+pathoscores = data.frame(row.names = rownames(subset), TumorPercentage.Revised = c(subset$TumorPercentage.Revised), StromaPercentage = c(subset$StromaPercentage),ImmunePercentage = c(subset$ImmunePercentage),SquamousPercentage = c(subset$SquamousPercentage))
+
+samplesigs = data.frame(row.names = rownames(subset),sumf01f03 = c(subset$f01+subset$f03), f04 = c(subset$f04), f06 = c(subset$f06), f05 = c(subset$f05))
+
+mydata = cor(samplesigs,pathoscores)
+rownames(mydata) = c("Sig1 + Sig3", "Sig4", "Sig6", "Sig5")
+colnames(mydata) = c("TumorPercentage.Revised", "StromalPercentage", "ImmunePercentage", "SquamousPercentage")
+
+palettes <-
+  ggthemes_data[["tableau"]][["color-palettes"]][["ordered-diverging"]]
+palette=tableau_div_gradient_pal("Red-Green-White Diverging")(seq(1, 0, length = 50))
+corrplot::corrplot(t(mydata), col=palette,tl.col="black")
+
+```
+
+```{r}
+subset = data$info[!is.na(data$info$TumorPercentage.Revised),]
+pathoscores = data.frame(row.names = rownames(subset), TumorPercentage.Revised = c(subset$TumorPercentage.Revised), StromaPercentage = c(subset$StromaPercentage),ImmunePercentage = c(subset$ImmunePercentage),SquamousPercentage = c(subset$SquamousPercentage))
+samplesigs = data.frame(row.names = rownames(subset),sumf01f03 = c(subset$f01+subset$f03), f01 = c(subset$f01), f03 = c(subset$f03), f04 = c(subset$f04),  f06 = c(subset$f06),f05 = c(subset$f05),f02 = c(subset$f02), f07 = c(subset$f07))
+
+mydata = cor(samplesigs,pathoscores)
+rownames(mydata) = c("Sig1 + Sig3", "Sig1","Sig3","Sig4", "Sig6","Sig5","Sig2", "Sig7")
+
+palettes <-
+  ggthemes_data[["tableau"]][["color-palettes"]][["ordered-diverging"]]
+palette=tableau_div_gradient_pal("Red-Green-White Diverging")(seq(1, 0, length = 50))
+corrplot::corrplot(t(mydata), col=palette,tl.col="black")
+
+```
+
+
+
+```{r}
+library(RColorBrewer)
+cols <- c("darkblue","blue", "white","red","darkred")
+newcol <- colorRampPalette(cols)
+col_breaks = seq(from=-5,to=5,by=0.1)
+ncols <- length(col_breaks)
+cols2 <- newcol(ncols)#apply the function to get 100 colours
+
+subset = data$info[data$info$SpecimenType!="C",]
+samplesigs = data.frame(row.names = rownames(subset), f01 = c(subset$f01), f02 = c(subset$f02), f03 = c(subset$f03), f04 = c(subset$f04), f05 = c(subset$f05), f06 = c(subset$f06), f07 = c(subset$f07))
+
+
+### liver
+genes.f = data.frame(c("SERPINC1","FGB","F9","APOC3"))
+colnames(genes.f) = "genes"
+
+eset = data$expression_set
+pl.eset = eset[,data$info$SpecimenType!="C"]
+pl.eset = pl.eset[rownames(pl.eset) %in% genes.f$genes,]
+pl.eset = pl.eset[match(genes.f$genes, rownames(pl.eset)),]
+pl.eset = pl.eset[,match(rownames(samplesigs), colnames(pl.eset))]
+pl.eset = t(scale(t(pl.eset)))
+
+order = order(samplesigs[,7],decreasing=T)
+samplesigs = samplesigs[order,]
+pl.eset = pl.eset[,order]
+
+annotation_labels = samplesigs[,7,drop=F]
+annotation_palette = list('f07'= c(tableau_seq_gradient_pal("Purple")(seq(0, 1, length = 100))))
+
+pheatmap(pl.eset,
+         cluster_rows = F,
+         cluster_cols = F,
+         show_rownames = T,
+         show_colnames = F,
+         annotation_col = annotation_labels,
+        annotation_colors = annotation_palette,
+         breaks=col_breaks,
+         cols2)
+
+### immune
+genes.f = data.frame(c("CXCL5","MMP3","IL1B","IL6","FCAR"))
+colnames(genes.f) = "genes"
+
+eset = data$expression_set
+pl.eset = eset[,data$info$SpecimenType!="C"]
+pl.eset = pl.eset[rownames(pl.eset) %in% genes.f$genes,]
+pl.eset = pl.eset[match(genes.f$genes, rownames(pl.eset)),]
+pl.eset = pl.eset[,match(rownames(samplesigs), colnames(pl.eset))]
+pl.eset = t(scale(t(pl.eset)))
+
+order = order(samplesigs[,6],decreasing=T)
+samplesigs = samplesigs[order,]
+pl.eset = pl.eset[,order]
+
+annotation_labels = samplesigs[,6,drop=F]
+annotation_palette = list('f06'= c(tableau_seq_gradient_pal("Green")(seq(0, 1, length = 100))))
+
+pheatmap(pl.eset,
+         cluster_rows = F,
+         cluster_cols = F,
+         show_rownames = T,
+         show_colnames = F,
+         annotation_col = annotation_labels,
+        annotation_colors = annotation_palette,
+         breaks=col_breaks,
+         cols2)
+
+### stroma
+genes.f = data.frame(c("SPARC","PDGFRA","PDGFRB","ACTA2","COL14A1"))
+colnames(genes.f) = "genes"
+
+eset = data$expression_set
+pl.eset = eset[,data$info$SpecimenType!="C"]
+pl.eset = pl.eset[rownames(pl.eset) %in% genes.f$genes,]
+pl.eset = pl.eset[match(genes.f$genes, rownames(pl.eset)),]
+pl.eset = pl.eset[,match(rownames(samplesigs), colnames(pl.eset))]
+pl.eset = t(scale(t(pl.eset)))
+
+order = order(samplesigs[,4],decreasing=T)
+samplesigs = samplesigs[order,]
+pl.eset = pl.eset[,order]
+
+annotation_labels = samplesigs[,4,drop=F]
+annotation_palette = list('f04'= c(tableau_seq_gradient_pal("Blue")(seq(0, 1, length = 100))))
+
+pheatmap(pl.eset,
+         cluster_rows = F,
+         cluster_cols = F,
+         show_rownames = T,
+         show_colnames = F,
+         annotation_col = annotation_labels,
+        annotation_colors = annotation_palette,
+         breaks=col_breaks,
+         cols2)
+
+### keratins
+genes.f = data.frame(c("KRT5","TP63","SERPINB4"))
+colnames(genes.f) = "genes"
+
+eset = data$expression_set
+pl.eset = eset[,data$info$SpecimenType!="C"]
+pl.eset = pl.eset[rownames(pl.eset) %in% genes.f$genes,]
+pl.eset = pl.eset[match(genes.f$genes, rownames(pl.eset)),]
+pl.eset = pl.eset[,match(rownames(samplesigs), colnames(pl.eset))]
+pl.eset = t(scale(t(pl.eset)))
+
+order = order(samplesigs[,5],decreasing=T)
+samplesigs = samplesigs[order,]
+pl.eset = pl.eset[,order]
+
+annotation_labels = samplesigs[,5,drop=F]
+annotation_palette = list('f05'= c(tableau_seq_gradient_pal("Brown")(seq(0, 1, length = 100))))
+
+pheatmap(pl.eset,
+         cluster_rows = F,
+         cluster_cols = F,
+         show_rownames = T,
+         show_colnames = F,
+         annotation_col = annotation_labels,
+        annotation_colors = annotation_palette,
+         breaks=col_breaks,
+         cols2)
+```
+```{r}
+save.info = data$info
+```
+
+
+
+```{r}
+##### Clustering with examplar genes
+set.seed(235)
+
+data$info = save.info
+
+## derive examplar genes 2F's
+genes.f1 = as.data.frame(list.topGenes[[1]][1:50,]);colnames(genes.f1) = "genes"
+genes.f2 = as.data.frame(list.topGenes[[3]][1:50,]);colnames(genes.f2) = "genes"
+#genes.f3 = as.data.frame(list.topGenes[[5]][1:50,]);colnames(genes.f3) = "genes"
+genes.f = rbind(genes.f1, genes.f2)
+#genes.f = rbind(genes.f, genes.f3)
+
+eset = data$expression_set
+pl.eset = eset[,]
+pl.eset = pl.eset[rownames(pl.eset) %in% genes.f$genes,]
+pl.eset = pl.eset[match(genes.f$genes, rownames(pl.eset)),]
+pl.eset = as.matrix(pl.eset)
+pl.eset = t(scale(t(pl.eset)))
+#pl.eset <- matrix(runif(50*30), nrow=50, ncol=30)
+cc = ConsensusClusterPlus::ConsensusClusterPlus(pl.eset, pItem=0.8, pFeature = 1, reps = 500,distance = "euclidean", clusterAlg = "km",verbose = F, maxK=10, title = "mol.subtype",plot="pdf")
+k=2
+mol.subtype = cc[[k]]$consensusClass
+mol.subtype[mol.subtype=="1"] = "IL"
+mol.subtype[mol.subtype=="2"] = "ML"
+dendrogram.order = cc[[k]]$consensusClass
+dendrogram.order[cc[[k]]$consensusTree$order]=1:186
+mol.subtype = cbind(mol.subtype, dendrogram.order)
+
+data$info = merge(mol.subtype,data$info, by=0)
+rownames(data$info) = data$info$Row.names
+data$info$Row.names = NULL
+data$info$dendrogram.order = as.numeric(data$info$dendrogram.order)
+
+annotations = data.frame(row.names = rownames(data$info), dendrogram.order=data$info$dendrogram.order, mol.subtype=data$info$mol.subtype, TumorType=data$info$TumorType, SpecimenType=data$info$SpecimenType)
+
+order = order(annotations$dendrogram.order)
+annotations = annotations[order,]
+pl.eset = pl.eset[,match(rownames(annotations),colnames(pl.eset))]
+
+library(RColorBrewer)
+cols <- c("darkblue","blue", "white","red","darkred")
+newcol <- colorRampPalette(cols)
+col_breaks = seq(from=-3,to=3,by=0.1)
+ncols <- length(col_breaks)
+cols2 <- newcol(ncols)#apply the function to get 100 colours
+
+ph.colors= list(SpecimenType = c(B = "#4E79A7", R="#F28E2B",M = "#59A14F", C = "#EDC948"),
+                TumorType = c(EAC = "#499894", ESC = "#E15759", GAC = "#79706E"),
+                mol.subtype = c(IL = "#4E79A7", ML = "#E15759", `3` = "gray", `4` = "black"),
+                f01= c(tableau_seq_gradient_pal("Red-Gold")(seq(0, 1, length = 100))),
+                f02= c(tableau_seq_gradient_pal("Orange")(seq(0, 1, length = 100))),
+                f03= c(tableau_seq_gradient_pal("Blue-Green Sequential")(seq(0, 1, length = 100))),
+                f04= c(tableau_seq_gradient_pal("Green")(seq(0, 1, length = 100))),
+                f05= c(tableau_seq_gradient_pal("Brown")(seq(0, 1, length = 100))),
+                f06= c(tableau_seq_gradient_pal("Blue")(seq(0, 1, length = 100))),
+                f07= c(tableau_seq_gradient_pal("Purple")(seq(0, 1, length = 100)))
+                )
+p=pheatmap(pl.eset,
+         cluster_rows = F,
+         cluster_cols = F,
+         show_rownames = F,
+         show_colnames = F,
+         breaks=col_breaks,
+         annotation_col = annotations,
+         annotation_colors = ph.colors,
+         cols2)
+#pdf("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/heatmap.sig1+3.allSamples.16MAR2023.pdf", height = 4.66, width = 9.15)
+print(p)
+#dev.off()
+
+#pdf("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/dendrogram.sig1+3.allSamples.mirrored.16MAR2023.pdf", height = 4.66, width = 9.15)
+ggdendrogram(cc[[2]]$consensusTree)
+#dev.off()
+
+```
+```{r}
+save.info = data$info
+```
+
+```{r}
+##### Clustering with examplar genes
+set.seed(235)
+
+data$info = save.info
+
+## derive examplar genes 2F's
+genes.f1 = as.data.frame(list.topGenes[[1]][1:50,]);colnames(genes.f1) = "genes"
+genes.f2 = as.data.frame(list.topGenes[[3]][1:50,]);colnames(genes.f2) = "genes"
+genes.f = rbind(genes.f1, genes.f2)
+
+eset = as.matrix(data$expression_set)
+pl.eset = eset[,data$info$TumorType!="ESC"&!is.na(data$info$TumorType) ]
+pl.eset = pl.eset[rownames(pl.eset) %in% genes.f$genes,]
+pl.eset = pl.eset[match(genes.f$genes, rownames(pl.eset)),]
+pl.eset = as.matrix(pl.eset)
+pl.eset = t(scale(t(pl.eset)))
+cc = ConsensusClusterPlus::ConsensusClusterPlus(pl.eset, pItem=0.8, pFeature = 1, reps = 500,distance = "euclidean", clusterAlg = "km",verbose = F, maxK=10, seed=123, title = "mol.subtype.adeno",plot="pdf")
+k=2
+mol.subtype.adeno = cc[[k]]$consensusClass
+mol.subtype.adeno[mol.subtype.adeno=="1"] = "IL"
+mol.subtype.adeno[mol.subtype.adeno=="2"] = "ML"
+dendrogram.order.adeno = cc[[k]]$consensusClass
+dendrogram.order.adeno[cc[[k]]$consensusTree$order]=1:dim(pl.eset)[2]
+mol.subtype.adeno = cbind(mol.subtype.adeno, dendrogram.order.adeno)
+
+data$info = merge(mol.subtype.adeno,data$info, by=0, all.y=T)
+rownames(data$info) = data$info$Row.names
+data$info$Row.names = NULL
+data$info$dendrogram.order.adeno = as.numeric(data$info$dendrogram.order.adeno)
+
+subset = data$info[data$info$TumorType!="ESC"&!is.na(data$info$TumorType),]
+annotations = data.frame(row.names = rownames(subset), dendrogram.order.adeno=subset$dendrogram.order.adeno, mol.subtype.adeno=subset$mol.subtype.adeno, TumorType=subset$TumorType, SpecimenType=subset$SpecimenType)
+
+order = order(annotations$dendrogram.order.adeno)
+annotations = annotations[order,]
+pl.eset = pl.eset[,match(rownames(annotations),colnames(pl.eset))]
+
+library(RColorBrewer)
+cols <- c("darkblue","blue", "white","red","darkred")
+newcol <- colorRampPalette(cols)
+col_breaks = seq(from=-3,to=3,by=0.1)
+ncols <- length(col_breaks)
+cols2 <- newcol(ncols)#apply the function to get 100 colours
+
+ph.colors= list(SpecimenType = c(B = "#4E79A7", R="#F28E2B",M = "#59A14F", C = "#EDC948"),
+                TumorType = c(EAC = "#499894", ESC = "#E15759", GAC = "#79706E"),
+                mol.subtype.adeno = c(IL = "#4E79A7", ML = "#E15759", `3` = "gray", `4` = "black"),
+                f01= c(tableau_seq_gradient_pal("Red-Gold")(seq(0, 1, length = 100))),
+                f02= c(tableau_seq_gradient_pal("Orange")(seq(0, 1, length = 100))),
+                f03= c(tableau_seq_gradient_pal("Blue-Green Sequential")(seq(0, 1, length = 100))),
+                f04= c(tableau_seq_gradient_pal("Green")(seq(0, 1, length = 100))),
+                f05= c(tableau_seq_gradient_pal("Brown")(seq(0, 1, length = 100))),
+                f06= c(tableau_seq_gradient_pal("Blue")(seq(0, 1, length = 100))),
+                f07= c(tableau_seq_gradient_pal("Purple")(seq(0, 1, length = 100)))
+                )
+p=pheatmap(pl.eset,
+         cluster_rows = F,
+         cluster_cols = F,
+         show_rownames = F,
+         show_colnames = F,
+         breaks=col_breaks,
+         annotation_col = annotations,
+         annotation_colors = ph.colors,
+         cols2)
+#pdf("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/heatmap.sig1+3.adenoSamples.16MAR2023.pdf", height = 4.66, width = 9.15)
+print(p)
+#dev.off()
+
+#pdf("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/dendrogram.sig1+3.adenoSamples.mirrored.16MAR2023.pdf", height = 4.66, width = 9.15)
+ggdendrogram(cc[[2]]$consensusTree)
+#dev.off()
+```
+
+```{r}
+#save(data, file = "/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/eac.bijlsma.186.s4b.merged.and.classified.Rda")
+```
+
+
+```{r}
+p=factoextra::fviz_nbclust(pl.eset, kmeans, method = "silhouette")
+#pdf("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/mol.subtype.adeno/silhouette_widths.pdf", height = 3, width=3)
+print(p)
+#dev.off()
+```
+
+
+```{r}
+sample.sigs = t(ds$samplesigs)
+temp = sample.sigs
+temp = temp[data$info$TumorType == "EAC" &
+              data$info$SpecimenType != "C" & !is.na(data$info$TumorPercentage.Revised),]
+sample.factor = apply(temp, 1, function(x) which.max(x))
+for (i in 1:dim(sample.sigs)[2]) {
+  print(i)
+  
+  distance = c(rep(0,nrow(temp)))
+  temp = as.data.frame(cbind(temp, distance))
+  colnames(temp)[dim(temp)[2]] = paste0("distance.f",i)
+  featuresMatrix = temp[,1:dim(temp)[2]]
+  for (g in 1:dim(featuresMatrix)[1]){
+    Weight = featuresMatrix[g,i]
+    MaxWeight = max(featuresMatrix[g,])
+    dist = Weight - MaxWeight
+    temp[g,dim(temp)[2]] = Weight - MaxWeight
+    if (dist == 0) {
+    maxWeight = sort(featuresMatrix[g,])[dim(featuresMatrix)[2]]
+    secMaxWeight = sort(featuresMatrix[g,])[dim(featuresMatrix)[2]-1]
+    dist = maxWeight - secMaxWeight
+    temp[g,dim(temp)[2]] = maxWeight - secMaxWeight
+    }
+    
+  }
+}
+temp = cbind(temp,sample.factor)
+temp
+lookup = data.frame(az.id = rownames(data$info), pt.id = data$info$samplename, mol.subtype.adeno = data$info$mol.subtype.adeno, differentiation.grade = data$info$Differentiation_grade,
+                    TumorPercentage.Revised = data$info$TumorPercentage.Revised,
+                    StromaPercentage = data$info$StromaPercentage,
+                    ImmunePercentage = data$info$ImmunePercentage,
+                    SquamousPercentage = data$info$SquamousPercentage,
+                    BarrettsPercentage = data$info$BarrettsPercentage,
+                    MusclePercentage = data$info$MusclePercentage,
+                    LiverPercentage = data$info$LiverPercentage)
+
+temp = merge(x = temp, y = lookup, by.x = 0, by.y = "az.id", all.x = T)
+
+temp.toPlot = temp[,]
+library(ggrepel)
+p1 = ggplot(temp.toPlot, aes(y=V1,x=distance.f1))+ 
+  geom_point(aes(color=mol.subtype.adeno, shape = differentiation.grade))+
+  geom_text_repel(
+    data = temp.toPlot,
+    aes(label = pt.id),
+    colour = "black",
+    size = 2,
+    box.padding = unit(0.3, "lines")
+  )
+
+p2 = ggplot(temp.toPlot, aes(y=V3,x=distance.f3))+ 
+  geom_point(aes(color=mol.subtype.adeno, shape = differentiation.grade))+
+  geom_text_repel(
+    data = temp.toPlot,
+    aes(label = pt.id),
+    colour = "black",
+    size = 2,
+    box.padding = unit(0.3, "lines")
+  )
+
+p3 = ggplot(temp.toPlot, aes(y=V4,x=distance.f4))+ 
+  geom_point(aes(color=mol.subtype.adeno, shape = differentiation.grade))+
+  geom_text_repel(
+    data = temp.toPlot,
+    aes(label = pt.id),
+    colour = "black",
+    size = 2,
+    box.padding = unit(0.3, "lines")
+  )
+
+p4 = ggplot(temp.toPlot, aes(y=V5,x=distance.f5))+ 
+  geom_point(aes(color=mol.subtype.adeno, shape = differentiation.grade))+
+  geom_text_repel(
+    data = temp.toPlot,
+    aes(label = pt.id),
+    colour = "black",
+    size = 2,
+    box.padding = unit(0.3, "lines")
+  )
+
+p5 = ggplot(temp.toPlot, aes(y=V6,x=distance.f6))+ 
+  geom_point(aes(color=mol.subtype.adeno, shape = differentiation.grade))+
+  geom_text_repel(
+    data = temp.toPlot,
+    aes(label = pt.id),
+    colour = "black",
+    size = 2,
+    box.padding = unit(0.3, "lines")
+  )
+
+#cowplot::plot_grid(p1, p2, p3, p4, p5)
+```
+
+
+```{r, fig.width = 5, fig.height = 8}
+subset = data$info %>%
+  filter(Matched=="Yes" & TumorType != "ESC" & SpecimenType != "C")
+subset$NoBI.oesI = as.factor(subset$NoBI.oesI)
+order = subset %>%
+  filter(SpecimenType !="B") %>%
+  arrange(MLscore) %>%
+  pull(NoBI.oesI)
+
+subset$NoBI.oesI <- factor(subset$NoBI.oesI, levels = unique(subset$NoBI.oesI[match(order,subset$NoBI.oesI)]))
+
+p1 = ggplot(subset,aes(x=MLscore, y=NoBI.oesI, shape = mol.subtype.adeno, color=SpecimenType)) +
+  geom_line(aes(group=NoBI.oesI, ), color="black")+
+  geom_point(aes(size=3, shape=)) +
+  scale_color_manual(values=c(B = "#507AA8",R = "#F28E2D", M = "#59A14F")) +
+  scale_shape_manual(values=c(15,17))+
+  theme_classic()
+
+subset = data$info %>%
+  filter(Matched=="Yes" & TumorType != "ESC" & SpecimenType != "C" & SpecimenType != "M")
+subset = subset[(duplicated(subset$NoBI.oesI) | duplicated(subset$NoBI.oesI, fromLast = TRUE)), ]
+subset$NoBI.oesI = as.factor(subset$NoBI.oesI)
+order = subset %>%
+  filter(SpecimenType !="B") %>%
+  arrange(MLscore) %>%
+  pull(NoBI.oesI)
+
+subset$NoBI.oesI <- factor(subset$NoBI.oesI, levels = unique(subset$NoBI.oesI[match(order,subset$NoBI.oesI)]))
+
+p2 = ggplot(subset,aes(x=MLscore, y=NoBI.oesI, shape = mol.subtype.adeno, color=SpecimenType)) +
+  geom_line(aes(group=NoBI.oesI, ), color="black")+
+  geom_point(aes(size=3, shape=)) +
+  scale_color_manual(values=c(B = "#507AA8",R = "#F28E2D", M = "#59A14F")) +
+  scale_shape_manual(values=c(15,17))+
+  theme_classic()
+
+subset = data$info %>%
+  filter(Matched=="Yes" & TumorType != "ESC" & SpecimenType != "C" & SpecimenType != "R")
+subset = subset[(duplicated(subset$NoBI.oesI) | duplicated(subset$NoBI.oesI, fromLast = TRUE)), ]
+subset$NoBI.oesI = as.factor(subset$NoBI.oesI)
+order = subset %>%
+  filter(SpecimenType !="B") %>%
+  arrange(MLscore) %>%
+  pull(NoBI.oesI)
+
+subset$NoBI.oesI <- factor(subset$NoBI.oesI, levels = unique(subset$NoBI.oesI[match(order,subset$NoBI.oesI)]))
+
+p3 = ggplot(subset,aes(x=MLscore, y=NoBI.oesI, shape = mol.subtype.adeno, color=SpecimenType)) +
+  geom_line(aes(group=NoBI.oesI, ), color="black")+
+  geom_point(aes(size=3, shape=)) +
+  scale_color_manual(values=c(B = "#507AA8",R = "#F28E2D", M = "#59A14F")) +
+  scale_shape_manual(values=c(15,17))+
+  theme_classic()
+
+print(cowplot::plot_grid(p1, p2, p3, ncol=1))
+  
+```
+
+
+```{r}
+baseline.table = data.frame(
+  data$info$labid1R2,
+  data$info$NoBI.oesI,
+  data$info$SpecimenType,
+  data$info$MLscore,
+  data$info$mol.subtype.adeno,
+  data$info$f01,
+  data$info$f03,
+  data$info$OS.days.,
+  data$info$Survival_event,
+  data$info$Age_at_diagnosis,
+  data$info$BMI,
+  data$info$Gender,
+  data$info$TumorType,
+  data$info$HER2,
+  data$info$SampleLocation,
+  data$info$Tumor_location,
+  data$info$Differentiation_grade,
+  data$info$cT,
+  data$info$cN,
+  data$info$cM,
+  data$info$R0_resection,
+  data$info$pT,
+  data$info$pN,
+  data$info$pM,
+  data$info$Neoadjuvant_treatment,
+  data$info$Treatment_prior,
+  data$info$Treatment_after,
+  as.character(data$info$Mandard),
+  data$info$Matched)
+
+colnames(baseline.table) = c(
+  "Sample.ID",
+  "NoBI.oesI",
+  "SpecimenType",
+  "MLscore",
+  "mol.subtype.adeno",
+  "f01",
+  "f03",
+  "Survival.days",
+  "Survival.status",
+  "Age",
+  "BMI",
+  "Gender",
+  "Histology",
+  "HER2",
+  "SampleLocation",
+  "Tumorlocation",
+  "Differentiation_grade",
+  "cT",
+  "cN",
+  "cM",
+  "R0_resection",
+  "pT",
+  "pN",
+  "pM",
+  "Neoadjuvant_treatment",
+  "Treatment_prior",
+  "Treatment_after",
+  "Mandard",
+  "Matched"
+)
+
+baseline.table = within(baseline.table, {
+  Gender = as.factor(Gender)
+  Histology = as.factor(Histology)
+  HER2 = as.factor(HER2)
+  SpecimenType = factor(SpecimenType, levels = c("B", "R", "M"))
+  Differentiation_grade = recode(Differentiation_grade, "Moderate" = "Moderate", "Poorly" = "Poor",  "Undifferentiated" = "Poor", "Well/Moderate" = "Well",  "Moderate/Poorly" = "Moderate")
+  Differentiation_grade = factor(Differentiation_grade, levels = c("Poor", "Moderate", "Well"))
+  cT = factor(cT, levels = c("1", "2", "3", "4", "x"))
+  cT = recode(cT, "1" = "cT1", "2" = "cT2", "3" = "cT3", "4" = "cT4", "x" = "cTx")
+  cN = factor(cN, levels = c("0", "1", "2", "3", "x"))
+  cN = recode(cN, "0" = "cN0", "1" = "cN1", "2" = "cN2", "3" = "cN3", "x" = "cNx")
+  cM = factor(cM, levels = c("0", "1", "x"))
+  cM = recode(cM, "0" = "cM0", "1" = "cM1", "x" = "cMx")
+  R0_resection = factor(R0_resection, levels = c("0", "1"))
+  R0_resection = recode(R0_resection, "0" = "R0", "1" = "R1")
+  pT = factor(pT, levels = c("0","1", "2", "3", "4", "x"))
+  pT = recode(pT, "0" = "pT0","1" = "pT1", "2" = "pT2", "3" = "pT3", "4" = "pT4", "x" = "pTx")
+  pN = factor(pN, levels = c("0", "1", "2", "3"))
+  pN = recode(pN, "0" = "pN0", "1"= "pN1", "2"= "pN2", "3"= "pN3")
+  pM = factor(pM, levels = c("0", "1"))
+  pM = recode(pM, "0" = "pM0", "1" = "pM1")
+  Neoadjuvant_treatment = recode(Neoadjuvant_treatment, "CROSS+SOX" = "CROSS", "PERFECT" = "CROSS+α-PD-L1", "TRAP" = "CROSS+α-HER2/3")
+  Treatment_prior = recode(Treatment_prior, "CROSS+SOX" = "CROSS", "PERFECT" = "CROSS+α-PD-L1", "TRAP" = "CROSS+α-HER2/3")
+  Treatment_after = recode(Treatment_after, "CROSS+SOX" = "CROSS", "PERFECT" = "CROSS+α-PD-L1", "TRAP" = "CROSS+α-HER2/3")
+  Mandard = factor(Mandard, levels = c("1", "2", "3", "4", "5"))
+  Mandard = recode(Mandard, "1" = "Mandard1", "2" = "Mandard2", "3" = "Mandard3", "4" = "Mandard4", "5" = "Mandard5")
+                                 })
+```
+
+
+
+```{r}
+baseline.all = baseline.table[baseline.table$SpecimenType!="C",]
+baseline.all = baseline.all[!is.na(baseline.all$Sample.ID),]
+all <- atable::atable(baseline.all,
+                            target_cols = c(
+  "Age",
+  "BMI",
+  "Gender",
+  "Histology",
+  "HER2",
+  "SampleLocation",
+  "Tumorlocation",
+  "Differentiation_grade",
+  "cT",
+  "cN",
+  "cM",
+  "R0_resection",
+  "pT",
+  "pN",
+  "pM",
+  "Neoadjuvant_treatment",
+  "Treatment_prior",
+  "Treatment_after",
+  "Mandard",
+  "Matched"
+                            ),group_col = "SpecimenType")
+knitr::kable(all)
+```
+
+```{r}
+baseline.unique = baseline.table[baseline.table$SpecimenType!="C",]
+baseline.unique = baseline.unique[!duplicated(baseline.unique$NoBI.oesI),]
+baseline.unique = baseline.unique[!is.na(baseline.unique$Sample.ID),]
+unique <- atable::atable(baseline.unique,
+                            target_cols = c(
+  "Age",
+  "BMI",
+  "Gender",
+  "Histology",
+  "HER2",
+  "SampleLocation",
+  "Tumorlocation",
+  "Differentiation_grade",
+  "cT",
+  "cN",
+  "cM",
+  "R0_resection",
+  "pT",
+  "pN",
+  "pM",
+  "Neoadjuvant_treatment",
+  "Treatment_prior",
+  "Treatment_after",
+  "Mandard",
+  "Matched"
+                            ))
+knitr::kable(unique)
+```
+
+```{r}
+for (specimen in c("B", "R", "M")) {
+baseline.specimen = baseline.table[baseline.table$SpecimenType==specimen,]
+specimen <- atable::atable(baseline.specimen,
+                            target_cols = c(
+  "Age",
+  "BMI",
+  "Gender",
+  "Histology",
+  "HER2",
+  "SampleLocation",
+  "Tumorlocation",
+  "Differentiation_grade",
+  "cT",
+  "cN",
+  "cM",
+  "R0_resection",
+  "pT",
+  "pN",
+  "pM",
+  "Neoadjuvant_treatment",
+  "Treatment_prior",
+  "Treatment_after",
+  "Mandard",
+  "Matched"
+                            ),group_col = "mol.subtype.adeno")
+print(knitr::kable(specimen))
+}
+```
+```{r}
+subset.resection = baseline.table[baseline.table$SpecimenType=="R" & baseline.table$Treatment_prior == "CROSS" ,]
+annotCol.pie.resection= melt(prop.table(table(subset.resection$mol.subtype)))
+colnames(annotCol.pie.resection) = c("Group", "value")
+annotCol.pie.resection$value=annotCol.pie.resection$value*100
+annotCol.pie.resection <- annotCol.pie.resection %>% 
+  arrange(desc(Group)) %>%
+  mutate(prop = value / sum(annotCol.pie.resection$value) *100) %>%
+  mutate(ypos = cumsum(prop)- 0.5*prop )
+annotCol.pie.resection
+p2=ggplot(annotCol.pie.resection, aes(x="", y=value, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0)+
+  theme_void()+
+  geom_text(aes(y = ypos, label = paste0(round(value, 1),"%")), color = "black", size=6) +
+  scale_fill_manual(values = c(ML="#E15759", IL="#4E79A7"))
+p2
+table(subset.resection$mol.subtype.adeno)
+table(data$info$Treatment_prior[data$info$TumorType != "ESC" & data$info$SpecimenType == "R"])
+```
+
+```{r}
+subset.biopsy = baseline.table[baseline.table$SpecimenType=="B",]
+annotCol.pie.biopsy= melt(prop.table(table(subset.biopsy$mol.subtype.adeno)))
+colnames(annotCol.pie.biopsy) = c("Group", "value")
+annotCol.pie.biopsy$value=annotCol.pie.biopsy$value*100
+annotCol.pie.biopsy <- annotCol.pie.biopsy %>% 
+  arrange(desc(Group)) %>%
+  mutate(prop = value / sum(annotCol.pie.biopsy$value) *100) %>%
+  mutate(ypos = cumsum(prop)- 0.5*prop )
+annotCol.pie.biopsy
+p1=ggplot(annotCol.pie.biopsy, aes(x="", y=value, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0)+
+  theme_void()+
+  geom_text(aes(y = ypos, label = paste0(round(value, 1),"%")), color = "black", size=6) +
+  scale_fill_manual(values = c(ML="#E15759", IL="#4E79A7"))
+
+subset.resection = baseline.table[baseline.table$SpecimenType=="R" & (baseline.table$Treatment_prior=="CROSS"),]
+annotCol.pie.resection= melt(prop.table(table(subset.resection$mol.subtype.adeno)))
+colnames(annotCol.pie.resection) = c("Group", "value")
+annotCol.pie.resection$value=annotCol.pie.resection$value*100
+annotCol.pie.resection <- annotCol.pie.resection %>% 
+  arrange(desc(Group)) %>%
+  mutate(prop = value / sum(annotCol.pie.resection$value) *100) %>%
+  mutate(ypos = cumsum(prop)- 0.5*prop )
+annotCol.pie.resection
+p2=ggplot(annotCol.pie.resection, aes(x="", y=value, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0)+
+  theme_void()+
+  geom_text(aes(y = ypos, label = paste0(round(value, 1),"%")), color = "black", size=6) +
+  scale_fill_manual(values = c(ML="#E15759", IL="#4E79A7"))
+
+#pdf("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/piecharts.subtypes.adenopats.BandR.26MAY2023.pdf", height = 4, width = 6)
+print(grid.arrange(p1, p2, nrow=1))
+#dev.off()
+
+subset = rbind(subset.biopsy, subset.resection)
+table(subset$mol.subtype.adeno, subset$SpecimenType)
+fisher.test(table(subset$mol.subtype.adeno, subset$SpecimenType))
+```
+
+```{r}
+subset.metastasis = baseline.table[baseline.table$SpecimenType=="M",]
+annotCol.pie.metastasis= melt(prop.table(table(subset.metastasis$mol.subtype.adeno)))
+colnames(annotCol.pie.metastasis) = c("Group", "value")
+annotCol.pie.metastasis$value=annotCol.pie.metastasis$value*100
+annotCol.pie.metastasis <- annotCol.pie.metastasis %>% 
+  arrange(desc(Group)) %>%
+  mutate(prop = value / sum(annotCol.pie.metastasis$value) *100) %>%
+  mutate(ypos = cumsum(prop)- 0.5*prop )
+annotCol.pie.metastasis
+p3=ggplot(annotCol.pie.metastasis, aes(x="", y=value, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0)+
+  theme_void()+
+  geom_text(aes(y = ypos, label = paste0(round(value, 1),"%")), color = "black", size=6) +
+  scale_fill_manual(values = c(ML="#E15759", IL="#4E79A7"))
+
+subset.metachronMet = baseline.table[baseline.table$SpecimenType=="M" & baseline.table$cM=="cM0" & baseline.table$Treatment_prior=="CROSS",]
+annotCol.pie.metachronMet= melt(prop.table(table(subset.metachronMet$mol.subtype.adeno)))
+colnames(annotCol.pie.metachronMet) = c("Group", "value")
+annotCol.pie.metachronMet$value=annotCol.pie.metachronMet$value*100
+annotCol.pie.metachronMet <- annotCol.pie.metachronMet %>% 
+  arrange(desc(Group)) %>%
+  mutate(prop = value / sum(annotCol.pie.metachronMet$value) *100) %>%
+  mutate(ypos = cumsum(prop)- 0.5*prop )
+annotCol.pie.metachronMet
+p4=ggplot(annotCol.pie.metachronMet, aes(x="", y=value, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0)+
+  theme_void()+
+  geom_text(aes(y = ypos, label = paste0(round(value, 1),"%")), color = "black", size=6) +
+  scale_fill_manual(values = c(ML="#E15759", IL="#4E79A7"))
+
+subset.synchronMet = baseline.table[baseline.table$SpecimenType=="M" & (baseline.table$cM=="cM1"),]
+annotCol.pie.synchronMet= melt(prop.table(table(subset.synchronMet$mol.subtype.adeno)))
+colnames(annotCol.pie.synchronMet) = c("Group", "value")
+annotCol.pie.synchronMet$value=annotCol.pie.synchronMet$value*100
+annotCol.pie.synchronMet <- annotCol.pie.synchronMet %>% 
+  arrange(desc(Group)) %>%
+  mutate(prop = value / sum(annotCol.pie.synchronMet$value) *100) %>%
+  mutate(ypos = cumsum(prop)- 0.5*prop )
+annotCol.pie.synchronMet
+p5=ggplot(annotCol.pie.synchronMet, aes(x="", y=value, fill=Group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0)+
+  theme_void()+
+  geom_text(aes(y = ypos, label = paste0(round(value, 1),"%")), color = "black", size=6) +
+  scale_fill_manual(values = c(ML="#E15759", IL="#4E79A7"))
+grid.arrange(p3, p4, p5, nrow=1)
+
+#pdf("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/piecharts.subtypes.adenopats.cM0CrossandcM1.26MAY2023.pdf", height = 4, width = 6)
+print(grid.arrange(p4, p5, nrow=1))
+#dev.off()
+
+subset = rbind(subset.metachronMet, subset.synchronMet)
+table(subset$mol.subtype.adeno, subset$cM)
+fisher.test(table(subset$mol.subtype.adeno, subset$cM))
+
+```
+
+```{r}
+library(finalfit)
+specimen = "B"
+baseline.specimen = baseline.table[baseline.table$SpecimenType==specimen & !is.na(baseline.table$SpecimenType) &
+                                   baseline.table$Histology!="ESC" & !is.na(baseline.table$Histology),]
+
+explanatory <- c(
+  "Age",
+  "BMI",
+  "Gender",
+  "Histology",
+  "HER2",
+  "Differentiation_grade",
+  "cT",
+  "cN",
+  "cM",
+  "R0_resection",
+  "Treatment_after",
+  "Mandard",
+"MLscore",
+"mol.subtype.adeno"
+  )
+explanatory_multi <- c(         
+
+  )
+dependent = "Surv(Survival.days, Survival.status)"
+baseline.specimen %>%
+  finalfit(dependent, explanatory,explanatory_multi = explanatory_multi) -> t1
+knitr::kable(t1, row.names=FALSE, align=c("l", "l", "r", "r", "r", "r"))
+```
+
+
+```{r}
+specimen = "R"
+baseline.specimen = baseline.table[baseline.table$SpecimenType==specimen & !is.na(baseline.table$SpecimenType) &
+                                   baseline.table$Histology!="ESC" & !is.na(baseline.table$Histology),]
+
+explanatory <- c(
+  "Age",
+  "BMI",
+  "Gender",
+  "Histology",
+  "HER2",
+  "Differentiation_grade",
+"R0_resection",
+  "pT",
+  "pN",
+  "pM",
+  "Treatment_prior",
+  "Mandard",
+"MLscore",
+"mol.subtype.adeno"
+  )
+explanatory_multi <- c(         
+
+  )
+dependent = "Surv(Survival.days, Survival.status)"
+
+baseline.specimen %>%
+  finalfit(dependent, explanatory,explanatory_multi = explanatory_multi) -> t2
+knitr::kable(t2, row.names=FALSE, align=c("l", "l", "r", "r", "r", "r"))
+```
+
+```{r}
+library(ggbeeswarm)
+data$info %>%
+  filter(TumorType!="ESC" & SpecimenType=="R") %>%
+  within({
+    Mandard = factor(Mandard, levels = c("1", "2", "3", "4", "5"))
+  Mandard = recode(Mandard, "1" = "Mandard1", "2" = "Mandard2", "3" = "Mandard3", "4" = "Mandard4", "5" = "Mandard5")
+    }) %>%
+  ggplot(aes(y=MLscore, x=Mandard)) + geom_boxplot() + geom_beeswarm()
+
+m <- data$info %>%
+  filter(TumorType!="ESC" & SpecimenType=="R") %>%
+  within({
+    Mandard = factor(Mandard, levels = c("1", "2", "3", "4", "5"))
+  Mandard = recode(Mandard, "1" = "Mandard1", "2" = "Mandard2", "3" = "Mandard3", "4" = "Mandard4", "5" = "Mandard5")
+    }) %>%
+MASS::polr(Mandard ~ MLscore, data=. , Hess=TRUE)
+summary(m)
+ctable <- coef(summary(m))
+p <- pnorm(abs(ctable[, "t value"]), lower.tail = FALSE) * 2
+ctable <- cbind(ctable, "p value" = p)
+ctable
+
+data$info %>%
+  filter(TumorType!="ESC" & SpecimenType=="R") %>%
+  within({
+    Mandard = factor(Mandard, levels = c("1", "2", "3", "4", "5"))
+  Mandard = recode(Mandard, "1" = "Mandard1", "2" = "Mandard2", "3" = "Mandard3", "4" = "Mandard4", "5" = "Mandard5")
+    }) %>%
+  ggplot(aes(y=MLscore, x=Mandard)) + geom_boxplot(aes(color=HER2)) + geom_point(position=position_dodge(width=0.75),aes(group=HER2, color=HER2))
+
+data$info %>%
+  filter(TumorType!="ESC" & SpecimenType=="B") %>%
+  within({
+    Mandard = factor(Mandard, levels = c("1", "2", "3", "4", "5"))
+  Mandard = recode(Mandard, "1" = "Mandard1", "2" = "Mandard2", "3" = "Mandard3", "4" = "Mandard4", "5" = "Mandard5")
+    }) %>%
+  ggplot(aes(y=MLscore, x=Mandard)) + geom_boxplot() + geom_beeswarm()
+
+```
+
+
+```{r}
+specimen = "M"
+baseline.specimen = baseline.table[baseline.table$SpecimenType==specimen & !is.na(baseline.table$SpecimenType) &
+                                   baseline.table$Histology!="ESC" & !is.na(baseline.table$Histology),]
+
+explanatory <- c(
+  "Age",
+  "BMI",
+  "Gender",
+  "Histology",
+  "HER2",
+  "cM",
+"MLscore",
+"mol.subtype.adeno"
+  )
+explanatory_multi <- c(         
+
+  )
+dependent = "Surv(Survival.days, Survival.status)"
+baseline.specimen %>%
+  finalfit(dependent, explanatory) -> t3
+knitr::kable(t3, row.names=FALSE, align=c("l", "l", "r", "r", "r", "r"))
+```
+
+```{r}
+specimen = "M"
+baseline.specimen = baseline.table[baseline.table$SpecimenType==specimen & !is.na(baseline.table$SpecimenType) &
+                                     baseline.table$Histology!="ESC" & !is.na(baseline.table$Histology) &
+                                     baseline.table$cM=="cM0" & !is.na(baseline.table$cM),]
+
+explanatory <- c(
+  "Age",
+  "BMI",
+  "Gender",
+  "Histology",
+  "HER2",
+"MLscore",
+"mol.subtype.adeno"
+  )
+explanatory_multi <- c(         
+
+  )
+dependent = "Surv(Survival.days, Survival.status)"
+baseline.specimen %>%
+  finalfit(dependent, explanatory) -> t4
+knitr::kable(t4, row.names=FALSE, align=c("l", "l", "r", "r", "r", "r"))
+```
+
+```{r}
+specimen = "M"
+baseline.specimen = baseline.table[baseline.table$SpecimenType==specimen & !is.na(baseline.table$SpecimenType) &
+                                     baseline.table$Histology!="ESC" & !is.na(baseline.table$Histology) &
+                                     baseline.table$cM=="cM1" & !is.na(baseline.table$Histology),]
+
+explanatory <- c(
+  "Age",
+  "BMI",
+  "Gender",
+  "Histology",
+  "HER2",
+"MLscore",
+"mol.subtype.adeno"
+  )
+explanatory_multi <- c(         
+
+  )
+dependent = "Surv(Survival.days, Survival.status)"
+baseline.specimen %>%
+  finalfit(dependent, explanatory) -> t4
+knitr::kable(t4, row.names=FALSE, align=c("l", "l", "r", "r", "r", "r"))
+```
+
+
+```{r}
+###survival
+library(survival)
+library(ggfortify)
+subset = data$info[data$info$TumorType!="ESC"& !is.na(data$info$TumorType) & data$info$SpecimenType=="M"& !is.na(data$info$SpecimenType) & data$info$Neoadjuvant_treatment=="CROSS"& !is.na(data$info$Neoadjuvant_treatment),]
+km_fit <- survfit(Surv(OS.days., Survival_event) ~ mol.subtype.adeno, data=subset)
+
+p=survminer::ggsurvplot(km_fit, data = subset, pval = TRUE)
+
+#pdf("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/OS.adeno.cM0.16MAR2023.pdf", height = 2, width = 3)
+print(p)
+#dev.off()
+```

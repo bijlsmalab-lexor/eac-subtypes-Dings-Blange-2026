@@ -1,0 +1,365 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+library(rmatio)
+library(viridis)
+library(pheatmap)
+library(ggpubr)
+library(gridExtra)
+library(ggplot2)
+library(ConsensusClusterPlus)
+library(tidyr)
+library(dplyr)
+library(RTN)
+
+setwd("/Users/markdings/Documents/PhD/Scripts")
+load("decoder_eacZalm6/eac.bijlsma.186.s4b.Rda")
+
+eset = data$expression_set
+list.coph = list()
+for (i in c(2:11)) {
+  a = i-1
+  if (!file.exists(paste0("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/K",i, "_res.mat"))) {
+    list.coph[[a]] = 0
+  } else {
+  ds = read.mat(paste0("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/K",i, "_res.mat"))
+  list.coph[[a]] = ds$coph
+  }
+}
+
+plot(x = 3:11, y = list.coph[2:length(list.coph)], type = "o")
+
+```
+
+```{r}
+k=7
+ds = read.mat(paste0("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6//K",k, "_res.mat"))
+rownames(ds$genesigs) = rownames(eset)
+features <- c(sprintf("f%02d", seq(1,ncol(ds$genesigs))))
+colnames(ds$genesigs) <- features; rm(features)
+
+colnames(ds$samplesigs) = colnames(eset)
+table = ds$samplesigs
+
+factor = apply(ds$genesigs, 1, function(x) which.max(x))
+ds$genesigs = cbind(factor,ds$genesigs); rm(factor)
+
+list.topGenes = list()
+for (f in 2:ncol(ds$genesigs)) {
+  i = f-1
+  print(i)
+  temp = ds$genesigs[ds$genesigs[,1] == i,]
+  distance = c(rep(0,nrow(temp)))
+  temp = as.data.frame(cbind(distance, temp))
+  
+  featuresMatrix = temp[,3:dim(temp)[2]]
+  
+  for (g in 1:dim(featuresMatrix)[1]){
+    maxWeight = max(featuresMatrix[g,])
+    secMaxWeight = max(sort(featuresMatrix[g,],partial=dim(featuresMatrix)[2])[dim(featuresMatrix)[2]-1])
+    dist = maxWeight - secMaxWeight
+    temp$distance[g] = maxWeight - secMaxWeight
+  }
+  temp = temp[order(-temp$distance), , drop = FALSE]
+  feature.top250 = rownames(temp)[1:250]
+  list.topGenes[i] = as.data.frame(c(feature.top250))
+}
+for (i in 1:length(list.topGenes)) {
+  print(paste0("cluster: ", i))
+  print(unlist(list.topGenes[[i]])[1:10])
+  toPrint = unlist(list.topGenes[[i]])[1:250]
+  #write.csv(file = paste0("signatureGene.feature",i,".txt") , toPrint)
+}
+
+```
+```{r}
+  i=3
+  print(i)
+  temp = ds$genesigs[ds$genesigs[,1] == i,]
+  distance = c(rep(0,nrow(temp)))
+  temp = as.data.frame(cbind(distance, temp))
+  
+  featuresMatrix = temp[,3:dim(temp)[2]]
+  
+  for (g in 1:dim(featuresMatrix)[1]){
+    maxWeight = max(featuresMatrix[g,])
+    secMaxWeight = max(sort(featuresMatrix[g,],partial=dim(featuresMatrix)[2])[dim(featuresMatrix)[2]-1])
+    dist = maxWeight - secMaxWeight
+    temp$distance[g] = maxWeight - secMaxWeight
+  }
+  temp = temp[order(-temp$distance), , drop = FALSE]
+```
+
+```{r}
+require("ggrepel")
+head(temp, n=20)
+temp$rank = 0
+for (i in 1:length(temp$rank)) {
+  temp$rank[i]=i
+}
+
+temp$name = rownames(temp)
+
+data("tfsData")
+tfs <- intersect(tfsData$all$SYMBOL, rownames(data$expression_set))
+
+temp$isTF = rownames(temp) %in% tfs
+temp$isTF = as.character(temp$isTF)
+#temp$isTF[temp$f03> 2& temp$distance>.9&temp$isTF=="TRUE"]= "SIG"
+temp = temp[order(temp$distance,decreasing = T),]
+temp$isTF[rownames(temp)=="GATA6"]= "SIG"
+
+#pdf("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/GATA6.f03.pdf", height = 2.44, width = 4.23)
+ggplot(temp, aes(y=f03,x=distance,color=isTF))+ 
+  geom_point(aes(alpha=isTF))+
+  scale_color_manual(values=c("FALSE"='#999999',"TRUE"='#444444',"SIG"="red"))+
+  scale_alpha_manual(values=c("FALSE"=0.2,"TRUE"=0.8,"SIG"=0.8))+
+  theme_minimal()+
+  geom_text_repel(
+    data = subset(temp, isTF=="SIG"),
+    aes(label = name),
+    colour = "black",
+    size = 3.5,
+    box.padding = unit(0.6, "lines")
+  )
+#dev.off()
+```
+
+```{r}
+require("ggrepel")
+head(temp, n=20)
+temp$rank = 0
+for (i in 1:length(temp$rank)) {
+  temp$rank[i]=i
+}
+
+temp$name = rownames(temp)
+
+data("tfsData")
+tfs <- intersect(tfsData$all$SYMBOL, rownames(data$expression_set))
+
+temp$isTF = rownames(temp) %in% tfs
+temp$isTF = as.character(temp$isTF)
+#temp$isTF[temp$f03> 2& temp$distance>.9&temp$isTF=="TRUE"]= "SIG"
+temp = temp[order(temp$distance,decreasing = T),]
+temp$isTF[temp$isTF=="TRUE"][1:5]= "SIG"
+
+pdf("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/TFs.f03.pdf", height = 2.44, width = 4.23)
+ggplot(temp, aes(y=f03,x=distance,color=isTF))+ 
+  geom_point(aes(alpha=isTF))+
+  scale_color_manual(values=c("FALSE"='#999999',"TRUE"='#444444',"SIG"="red"))+
+  scale_alpha_manual(values=c("FALSE"=0.2,"TRUE"=0.8,"SIG"=0.8))+
+  theme_minimal()+
+  geom_text_repel(
+    data = subset(temp, isTF=="SIG"),
+    aes(label = name),
+    colour = "black",
+    size = 3.5,
+    box.padding = unit(0.6, "lines")
+  )
+dev.off()
+```
+
+```{r}
+
+temp$ratio = temp$distance/temp$f03
+
+foo = temp[order(temp$ratio,decreasing = T),]
+
+foo$isTF = rownames(foo) %in% tfs
+foo$isTF = as.character(foo$isTF)
+foo$isTF[foo$ratio>0.55 &foo$isTF=="TRUE"]= "SIG"
+
+ggplot(foo,aes(y=ratio,x=distance))+  geom_point(aes(alpha=isTF))+
+  scale_color_manual(values=c("FALSE"='#999999',"TRUE"='#444444',"SIG"="red"))+
+  scale_alpha_manual(values=c("FALSE"=0.2,"TRUE"=1,"SIG"=1))+
+  geom_text_repel(
+    data = subset(foo, isTF=="SIG"),
+    aes(label = name),
+    colour = "black",
+    size = 3.5,
+    box.padding = unit(0.6, "lines")
+  )
+```
+
+```{r}
+  i=1
+  print(i)
+  temp = ds$genesigs[ds$genesigs[,1] == i,]
+  distance = c(rep(0,nrow(temp)))
+  temp = as.data.frame(cbind(distance, temp))
+  
+  featuresMatrix = temp[,3:dim(temp)[2]]
+  
+  for (g in 1:dim(featuresMatrix)[1]){
+    maxWeight = max(featuresMatrix[g,])
+    secMaxWeight = max(sort(featuresMatrix[g,],partial=dim(featuresMatrix)[2])[dim(featuresMatrix)[2]-1])
+    dist = maxWeight - secMaxWeight
+    temp$distance[g] = maxWeight - secMaxWeight
+  }
+  temp = temp[order(-temp$distance), , drop = FALSE]
+```
+
+```{r}
+require("ggrepel")
+head(temp, n=20)
+temp$rank = 0
+for (i in 1:length(temp$rank)) {
+  temp$rank[i]=i
+}
+
+temp$name = rownames(temp)
+
+data("tfsData")
+tfs <- intersect(tfsData$all$SYMBOL, rownames(data$expression_set))
+
+temp$isTF = rownames(temp) %in% tfs
+temp$isTF = as.character(temp$isTF)
+#temp$isTF[temp$f01> 1& temp$distance>0.275&temp$isTF=="TRUE"]= "SIG"
+temp = temp[order(temp$distance,decreasing = T),]
+temp$isTF[rownames(temp)=="KRT81"]= "SIG"
+
+#pdf("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/KRT81.f01.pdf", height = 2.44, width = 4.23)
+ggplot(temp, aes(y=f01,x=distance,color=isTF))+ 
+  geom_point(aes(alpha=isTF))+
+  scale_color_manual(values=c("FALSE"='#999999',"TRUE"='#444444',"SIG"="red"))+
+  scale_alpha_manual(values=c("FALSE"=0.2,"TRUE"=0.8,"SIG"=0.8))+
+  theme_minimal()+
+  geom_text_repel(
+    data = subset(temp, isTF=="SIG"),
+    aes(label = name),
+    colour = "black",
+    size = 3.5,
+    box.padding = unit(0.6, "lines")
+  )
+#dev.off()
+```
+
+```{r}
+require("ggrepel")
+head(temp, n=20)
+temp$rank = 0
+for (i in 1:length(temp$rank)) {
+  temp$rank[i]=i
+}
+
+temp$name = rownames(temp)
+
+data("tfsData")
+tfs <- intersect(tfsData$all$SYMBOL, rownames(data$expression_set))
+
+temp$isTF = rownames(temp) %in% tfs
+temp$isTF = as.character(temp$isTF)
+#temp$isTF[temp$f01> 1& temp$distance>0.275&temp$isTF=="TRUE"]= "SIG"
+temp = temp[order(temp$distance,decreasing = T),]
+temp$isTF[temp$isTF=="TRUE"][1:5]= "SIG"
+
+#pdf("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/TFs.f01.pdf", height = 2.44, width = 4.23)
+ggplot(temp, aes(y=f01,x=distance,color=isTF))+ 
+  geom_point(aes(alpha=isTF))+
+  scale_color_manual(values=c("FALSE"='#999999',"TRUE"='#444444',"SIG"="red"))+
+  scale_alpha_manual(values=c("FALSE"=0.2,"TRUE"=0.8,"SIG"=0.8))+
+  theme_minimal()+
+  geom_text_repel(
+    data = subset(temp, isTF=="SIG"),
+    aes(label = name),
+    colour = "black",
+    size = 3.5,
+    box.padding = unit(0.6, "lines")
+  )
+#dev.off()
+```
+
+
+
+```{r}
+#reduce expression set size:
+## Load only adenocarcinoma samples
+load("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm8/eac.bijlsma.156.s4b.eac.Rda")
+
+eset = data$expression_set
+eset$var = apply(eset, 1, var)
+plot(density(eset$var));abline(v=0.45, col="blue")
+eset = eset[eset$var > 0.45,]
+eset$var=NULL
+```
+
+
+```{r}
+tfs.ofInterest = temp$name[temp$isTF=="SIG"]
+rtni <- tni.constructor(expData = as.matrix(eset), 
+                        regulatoryElements = tfs.ofInterest, 
+                        rowAnnotation = data$probes, 
+                        colAnnotation = data$info)
+rtni <- tni.permutation(rtni, nPermutations = 100, pValueCutoff = 0.005)
+rtni <- tni.bootstrap(rtni)
+rtni <- tni.dpi.filter(rtni)
+```
+```{r}
+f.no=1
+genes.f = as.data.frame(list.topGenes[[f.no]][1:250]);colnames(genes.f) = "genes"
+  
+rtna <- tni2tna.preprocess(object = rtni, 
+                             phenotype = ds$genesigs[,f.no+1],
+                             #phenotype = as.matrix(temp[,1,drop=F])[,1], 
+                             hits =  as.character(genes.f$genes))
+rtna <- tna.mra(rtna)
+mra <- tna.get(rtna, what="mra", ntop = -1)
+print(head(mra, n=10))
+```
+```{r}
+rtna <- tna.gsea1(rtna, nPermutations=100)
+```
+
+```{r}
+  gsea1 <- tna.get(rtna, what="gsea1", ntop = -1)
+  head(gsea1)
+  tna.plot.gsea1(rtna, file = paste0("211116-tna_gsea1.",f.no,".pdf"),labPheno=paste0("Feature",f.no," weight"), ntop = 10, plotpdf = T)
+```
+
+```{r}
+library(igraph)
+library(ggraph)
+g <- tni.graph(rtni, tfs = "HMGA2")
+
+pdf("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/211116-Regulon.HMGA2.pdf")
+ggraph(g, layout = "stress") + 
+    geom_edge_link(color = "#CCCCCC") + 
+    geom_node_point(aes(shape = nodeShape, color = nodeColor))+
+  scale_color_manual(values = c( "#96D1FF", "#E9C156", "#FF8E91"))+
+    geom_node_text(aes(label = name), repel=T)+
+  theme_graph(base_family = "Helvetica")
+dev.off()
+```
+
+```{r}
+#library(igraph)
+#library(ggraph)
+#g <- tni.graph(rtni, tfs = temp$name[temp$isTF=="SIG"])
+#ggraph(g, layout = "stress") + 
+#    geom_edge_link(color = "#CCCCCC") + 
+#    geom_node_point(aes(shape = nodeShape, color = nodeColor))+
+#  scale_color_manual(values = c( "#96D1FF", "#E9C156", "#FF8E91"))+
+#    geom_node_text(aes(filter=tfs > 0,label = name), repel=T)+
+#  theme_graph(base_family = "Helvetica")
+```
+
+```{r}
+rtni@results$tn.dpi[rev(order(rtni@results$tn.dpi[,3])),3]
+rtni@results$tn.ref[rev(order(rtni@results$tn.ref[,3])),3]
+```
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+

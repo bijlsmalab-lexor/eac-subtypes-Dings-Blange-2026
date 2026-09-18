@@ -1,0 +1,499 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+library(MASS)
+library(igraph)
+library(MCL)
+library(wesanderson)
+library(dplyr)
+library(ggraph)
+library(pheatmap) # For the Heatmap
+library(RColorBrewer) # For colors
+library(diceR) # For the consensusmatrix after multiple iterations of MCL clustering
+library(WeightedCluster)
+library(viridis)
+library(cowplot)
+
+### Hypergeometric test in graph
+edge.hypergeometric.test = function(subtype1, subtype2){  
+  for (class_1 in 1:n_classifiers){
+    for (class_2 in 1:n_classifiers){
+      table.hypergeometric = table(output_cbind[,class_1], output_cbind[,class_2])
+      row_index = match(subtype1 , rownames(table.hypergeometric))
+      col_index = match(subtype2 , colnames(table.hypergeometric))
+      if (!is.na(row_index) && !is.na(col_index)) {
+        pval = phyper(log.p = F, table.hypergeometric[row_index,col_index]-1,sum(table.hypergeometric[,col_index]), sum(table.hypergeometric)-sum(table.hypergeometric[,col_index]), sum(table.hypergeometric[row_index,]), lower.tail = F)
+        return(pval)
+      }
+    }
+  }
+}
+
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x)))
+}
+
+plot.consensusgraph = function(g, Simplified = T, pval = 0.05, multiple.correction = F, edge.color.hypergeo.test = T){
+  colrs <- wes_palette("Darjeeling1",length(V(g)), type=c("continuous"))
+  V(g)$color <- colrs[V(g)]
+  
+  if (Simplified) {
+    g2 = simplify(g)
+  }else{g2 = g}
+  
+  
+  c_scale <- colorRamp(c('black', 'light gray'))
+  E(g2)$weight = sapply(E(g2), function(e) { 
+    pval = edge.hypergeometric.test(subtype1 = ends(g2, e)[1], subtype2 = ends(g2, e)[2])
+  })
+  
+  if (multiple.correction) {
+    E(g2)$weight = p.adjust(E(g2)$weight, method = "BH", length(E(g2)$weight))
+  }
+  
+  g2=delete.edges(g2, which(E(g2)$weight > pval))
+  
+  if (!Simplified) {E(g2)$weight = 0.1}
+  if (Simplified) {
+    if (edge.color.hypergeo.test) {
+      E(g2)$color = apply(c_scale(normalize(log(E(g2)$weight))), 1, function(x){
+        #print(x)
+        rgb(x[1]/255,x[2]/255,x[3]/255) 
+      })
+    } else {
+      E(g2)$color = apply(c_scale(normalize(log(E(g2)$weight))), 1, function(x){
+        #print(x)
+        rgb(125/255,125/255,125/255) 
+      })
+    }
+    E(g2)$pval = E(g2)$weight
+    
+    E(g2)$weight = 
+      sapply(E(g2), function(e) { 
+        intersect = length(all_shortest_paths(g, from=ends(g2, e)[1], to=ends(g2, e)[2])$res)
+        union1 = graph.strength(g)[which(names(graph.strength(g))==ends(g2, e)[1])]
+        union1 = union1 / n_classifiers_min_self
+        union2 = graph.strength(g)[which(names(graph.strength(g))==ends(g2, e)[2])]
+        union2 = union2 / n_classifiers_min_self
+        as.double((intersect/(union1+union2-intersect)))
+      })
+  }
+  
+  return(g2)
+}
+run.MCLclustering = function(AdjMat, inflationFactor){
+  output_mcl=mcl(x = AdjMat, addLoops=T, ESM = F, allow1 = T, inflation = inflationFactor)
+  
+  var = data.frame()
+  for (i in 1:length(output_mcl$Cluster)) {
+    cluster.number = output_mcl$Cluster[i]
+    cluster.name = row.names(AdjMat)[i]
+    if (i == 1) {
+      var = c(cluster.number,cluster.name)
+    }
+    else{
+      temp = c(cluster.number,cluster.name)
+      var = rbind(var, temp)
+    }
+  }
+  var=as.data.frame(var)
+  names(var) = c("mcl_clusters", "cluster_names")
+  return(var)
+}
+StabilityScore = function(referenceMCL, consensusOutcome,n_iterations){
+  result <- vector("list", nrow(referenceMCL))
+  for (index in 1:nrow(referenceMCL)){
+    
+    ss.mcl.cluster = referenceMCL$mcl_clusters[referenceMCL$cluster_names[]==rownames(consensusOutcome[index,])]
+    ss.original.cluster = referenceMCL$cluster_names[referenceMCL$cluster_names[]==rownames(consensusOutcome[index,])]
+    
+    freq = rowSums(consensusOutcome[-1] == as.numeric(as.character(ss.mcl.cluster)))[index]
+    Stab.Score = freq/n_iterations
+    result[[index]] = Stab.Score
+  }
+  return(result)
+}
+MedianStabilityScore = function(NetworkOutput, inflation, sil = T, median = T){
+  iterations = 10
+  set.seed(233)
+  for (i in 1:iterations) {
+    random_index <- sample(1:nrow(NetworkOutput), 0.8 * nrow(NetworkOutput))
+    random_cohort = NetworkOutput[random_index,]
+    
+    #Transform the dataframe to two columns
+    for (x in 1:n_classifiers) {
+      for (y in 1:n_classifiers) {
+        if (x<y) {
+          if (x==1 && y==2) {
+            random_df = random_cohort[c(x,y)]
+            names(random_df) = c("subtype1", "subtype2")
+          }
+          else{
+            temp = random_cohort[c(x,y)]
+            names(temp) = c("subtype1", "subtype2")
+            random_df = rbind(random_df,temp)
+          }
+        }
+      }
+    }
+    random_g.mcl <- graph_from_data_frame(random_df, directed = F)
+    #plot.consensusgraph(random_g.mcl)
+    random_gx.mcl = as_adjacency_matrix(plot.consensusgraph(random_g.mcl))
+    
+    random_var = run.MCLclustering(AdjMat = random_gx.mcl, inflation)
+    
+    if (i == 1) {
+      consensus_outcome = random_var
+      row.names(consensus_outcome) = consensus_outcome$cluster_names
+      consensus_outcome = subset(consensus_outcome, select = -c(cluster_names))
+      names(consensus_outcome) = c(paste0("iter_", i))
+    }
+    if (i > 1){
+      random_temp = random_var
+      row.names(random_temp) = random_temp$cluster_names
+      random_temp = subset(random_temp, select = -c(cluster_names))
+      names(random_temp) = c(paste0("iter_", i))
+      consensus_outcome = merge(consensus_outcome, random_temp, by= 0, all=T)
+      row.names(consensus_outcome) = consensus_outcome$Row.names
+      consensus_outcome = subset(consensus_outcome, select = -c(Row.names))
+    }
+    
+  }
+  
+  consensus_outcome_matrix = consensus_matrix(consensus_outcome)
+  rownames(consensus_outcome_matrix) = rownames(consensus_outcome)
+  colnames(consensus_outcome_matrix) = rownames(consensus_outcome)
+  
+  ## Calculate the mode for each row to determine the higher frequency subtype label
+  mat_col <- data.frame(group = apply(consensus_outcome, 1, function(v) {
+    uniqv <- unique(v)
+    uniqv[which.max(tabulate(match(v, uniqv)))]}))
+  rownames(mat_col) = rownames(consensus_outcome)
+  
+  ## Colors:
+  ### Heatmap colors
+  heatcol <- colorRampPalette(c("white", "#4DAF4A"))
+  ### Mode of GIS subtype annotation colors
+  mat_colors <- list(group = inferno(length(levels(unique(mat_col$group)))))
+  names(mat_colors$group) <- unique(mat_col$group)
+  
+  heatmap = pheatmap(
+    consensus_outcome_matrix,
+    col=heatcol(100),
+    treeheight_row = 0,
+    border_color = "black",
+    annotation_col = mat_col,
+    annotation_colors = mat_colors
+  )
+  
+  
+  if (sil==T) {
+    stab.score = as.numeric(StabilityScore(random_var,consensus_outcome,iterations))
+    dist_matrix = dist(consensus_outcome_matrix)
+    tryCatch({
+      sil.object = wcSilhouetteObs(
+        diss = dist_matrix,
+        clustering = mat_col$group,
+        measure = 'ASWw',
+        weights = stab.score)
+      if (median) {
+        return(median(sil.object))
+      } else {
+        return(mean(sil.object))}
+      #return(weighted.mean(sil.object, w=stab.score))
+    }
+    ,error=function(e){return(0)}
+    ) 
+  } else {
+    print("stability")
+    if (median) {
+      return(median(as.numeric(StabilityScore(random_var,consensus_outcome,iterations))))
+    } else { return(mean(as.numeric(StabilityScore(random_var,consensus_outcome,iterations))))}
+  }
+}
+```
+
+
+```{r}
+
+
+cohort = "eac.bijlsma.186.s4b"
+
+convert.data = read.csv("/Users/markdings/Documents/PhD/Scripts/decoder_eacZalm6/eac.bijlsma.186.s4b.samplemetadata.csv", row.names = 1)
+
+batchcor = "combat"
+
+commandArgs <- function() c(
+  paste0("/Users/markdings/Documents/PhD/Scripts/PanGI_Network_analysis/output.classification/oh/",cohort,".BCCP.Oh.299genes.",batchcor,".txt"),
+  "Nearest_subgroup",
+  paste0("/Users/markdings/Documents/PhD/Scripts/PanGI_Network_analysis/output.classification/rozen/",cohort,".Rozen.txt"),
+  "Nearest_Rozen_Subtype",
+  paste0("/Users/markdings/Documents/PhD/Scripts/PanGI_Network_analysis/output.classification/tan/",cohort,".SVM.Tan171genes.",batchcor,".txt"),
+  "Tan_subtype",
+  paste0("/Users/markdings/Documents/PhD/Scripts/PanGI_Network_analysis/output.classification/dings/",cohort," non-norm.final.newMac_new_samplemetadata.txt"), "mol.subtype.adeno"
+)
+
+args = commandArgs()
+n_classifiers = length(args)/2
+n_classifiers_min_self = n_classifiers-1
+
+#Set Working directory
+setwd("/Users/markdings/Documents/PhD/Scripts/PanGI_Network_analysis/")
+
+#Delimit all the classified samples
+output_classifier = list()
+for (i in 1:n_classifiers) {
+  output_classifier[[i]] = read.delim(file=args[i*2-1], sep ="\ ", header = T, row.names = 1)
+}
+
+#Obtain all the wanted subtype labels
+myvars_list = list()
+for (i in 1:n_classifiers) {
+  myvars_list[[i]] = args[i*2]
+}
+
+#Reduce the labels to the once you want to plot
+for (i in 1:n_classifiers) {
+  if (i == 1) {
+    output_cbind = output_classifier[[i]][myvars_list[[i]]]
+  }
+  else {
+    output_cbind = merge(output_cbind, output_classifier[[i]][myvars_list[[i]]], by = 0)
+    rownames(output_cbind) = output_cbind$Row.names
+    output_cbind$Row.names=NULL
+  }
+}
+
+## if one classification system classify the sample as NA, the whole sample is removed
+keepTheseNames =  rownames(convert.data)[convert.data$SpecimenType=="B"|convert.data$SpecimenType=="R"]
+output_cbind=output_cbind[rownames(output_cbind) %in% keepTheseNames,]
+output_cbind=na.omit(output_cbind)
+
+#Transform the dataframe to two columns
+for (i in 1:n_classifiers) {
+  for (j in 1:n_classifiers) {
+    if (i<j) {
+      if (i==1 && j==2) {
+        df = output_cbind[c(i,j)]
+        names(df) = c("subtype1", "subtype2")
+      }
+      else{
+        temp = output_cbind[c(i,j)]
+        names(temp) = c("subtype1", "subtype2")
+        df = rbind(df,temp)
+      }
+    }
+  }
+}
+
+
+
+```
+
+```{r}
+g<- graph_from_data_frame(df, directed = F)
+g2 = plot.consensusgraph(g, Simplified = T, pval=0.05, multiple.correction = T, edge.color.hypergeo.test = T)
+
+subtype.clrs = c("Inv"="#b66353","Meta"="#fbb04e","Pro"="#f47942",
+  "G-INT" = "#a2ceaa", "G-DIF" = "#638b66",
+  "MP"="#4f6980","EP"="#849db1",
+  "IL"="#4E79A7","ML"="#E15759"
+  )
+
+subtype.clrs.network = subtype.clrs[match(V(g2)$name, names(subtype.clrs))]
+V(g2)$color = subtype.clrs.network
+set.seed(25)
+plot(g2, 
+     vertex.size=normalize(graph.strength(g))*30, 
+     edge.width=normalize(E(g2)$weight)*15,
+     layout=layout_nicely,
+     edge.arrow.size=0)
+title(cohort, line =0)
+
+p = ggraph(g2, layout = 'nicely') +
+  geom_edge_link(aes(width =  E(g2)$weight, color=log(E(g2)$pval)))  +       # colors by edge type 
+  scale_edge_colour_continuous(
+  low = "black",
+  high = "light gray",
+  space = "Lab",
+  na.value = "grey50",
+  guide = "edge_colourbar"
+)+
+  geom_node_point(alpha=0.99,color=V(g2)$color, aes(size = graph.strength(g)/4)) +  # size by audience size  
+  geom_node_text(aes(label = V(g2)$name), size=3, color="black", repel=F) +
+  theme_void()
+
+#pdf(paste0("/Users/markdings/Documents/PhD/Scripts/PanGI_Network_analysis/output.network/bioes/output.network.",cohort,".pdf"),width = 5.73, height=3.57)
+#print(p)
+#dev.off()
+```
+
+
+```{r}
+library(reshape2)
+
+catHeatmap = output_cbind
+catHeatmap[sapply(catHeatmap, is.character)] <- lapply(catHeatmap[sapply(catHeatmap, is.character)], 
+                                       as.factor)
+#Oh
+catHeatmap$Nearest_subgroup = factor(catHeatmap$Nearest_subgroup, levels=levels(catHeatmap$Nearest_subgroup)[c(2,1)])
+catHeatmap = catHeatmap[order(catHeatmap$Nearest_subgroup),]
+#Rozen
+catHeatmap = catHeatmap[order(catHeatmap$Nearest_Rozen_Subtype),]
+#Tan
+catHeatmap = catHeatmap[order(catHeatmap$Tan_subtype),]
+#Dings
+catHeatmap$mol.subtype.adeno = factor(catHeatmap$mol.subtype.adeno, levels=levels(catHeatmap$mol.subtype.adeno)[c(2,1)])
+catHeatmap = catHeatmap[order(catHeatmap$mol.subtype.adeno),]
+
+catHeatmap$person = rownames(catHeatmap)
+catHeatmap$person = factor(catHeatmap$person, levels=catHeatmap$person)
+catHeatmap2 <- reshape2::melt(catHeatmap, id.var = 'person')
+catHeatmap2$number = seq(1:length(catHeatmap2$person))
+
+p1 = ggplot(catHeatmap2, aes(x=person,y=variable)) +
+  geom_tile(aes(fill = value), colour = "white")+ 
+  scale_fill_manual(values=subtype.clrs)+
+  scale_y_discrete(expand = expansion(mult = c(1, 0), add = 0)) +
+  theme(panel.background=element_blank(),
+        axis.title=element_blank(),
+        panel.grid=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks=element_blank(),
+        axis.text.y=element_text(size=10))
+
+p1
+
+#pdf(paste0("/Users/markdings/Documents/PhD/Scripts/PanGI_Network_analysis/output.network/bioes/output.donut.",cohort,".pdf"),width = 8, height=8)
+#print(p1)
+#dev.off()
+```
+```{r}
+table(output_cbind$mol.subtype.adeno, output_cbind$Tan_subtype) # Tan
+fisher.test(output_cbind$mol.subtype.adeno, output_cbind$Tan_subtype) # Tan
+table(output_cbind$mol.subtype.adeno, output_cbind$Nearest_Rozen_Subtype) # Lei
+fisher.test(output_cbind$mol.subtype.adeno, output_cbind$Nearest_Rozen_Subtype) # Lei
+table(output_cbind$mol.subtype.adeno, output_cbind$Nearest_subgroup) # Oh
+fisher.test(output_cbind$mol.subtype.adeno, output_cbind$Nearest_subgroup) # Oh
+```
+
+```{r}
+df_adeno = right_join(rownames_to_column(convert.data, var = "id"), rownames_to_column(output_cbind, var = "id"), by = "id")
+df_adeno <- df_adeno %>%
+  mutate(
+    mol.subtype.adeno.x = factor(mol.subtype.adeno.x, levels = c("ML", "IL")),
+    Tan_subtype = factor(Tan_subtype, levels = c("G-DIF", "G-INT")),
+    Nearest_Rozen_Subtype = factor(Nearest_Rozen_Subtype, levels = c("Inv", "Meta", "Pro")),
+    Nearest_subgroup = factor(Nearest_subgroup, levels = c("MP", "EP"))
+  )
+#write.csv(x = df_adeno[,c(1,4,6,7,8,9,10,11,12, 85,86,87)], "eac.bijlsma.186.allSubtypeLabels.csv")
+```
+
+```{r}
+
+compute_boxplot_stats <- function(df_long, group_col = "combo", value_col = "value", facet_col = "feature") {
+  df_long %>%
+    group_by(.data[[facet_col]], .data[[group_col]]) %>%
+    summarise(
+      n            = sum(!is.na(.data[[value_col]])),
+      min          = min(.data[[value_col]], na.rm = TRUE),
+      q25          = quantile(.data[[value_col]], 0.25, na.rm = TRUE),
+      median       = median(.data[[value_col]], na.rm = TRUE),
+      q75          = quantile(.data[[value_col]], 0.75, na.rm = TRUE),
+      max          = max(.data[[value_col]], na.rm = TRUE),
+      whisker_low  = min,    # full range, not Tukey-trimmed
+      whisker_high = max,
+      .groups = "drop"
+    ) %>%
+    rename(group = all_of(group_col), feature = all_of(facet_col))
+}
+
+# Export PDFs for each subtyping system
+# Function to create and save plots for a given subtyping system
+create_subtype_plots <- function(df, subtype_col, filename) {
+  # Create combo variable with proper factor ordering
+  df_temp <- df %>%
+    mutate(combo = factor(
+      paste(mol.subtype.adeno.x, !!sym(subtype_col), sep = ":"),
+      levels = paste(
+        rep(levels(mol.subtype.adeno.x), each = length(levels(!!sym(subtype_col)))),
+        rep(levels(!!sym(subtype_col)), times = length(levels(mol.subtype.adeno.x))),
+        sep = ":"
+      )
+    ))
+  
+  # Reshape to long format
+  df_long_temp <- df_temp %>%
+    pivot_longer(cols = c(f01, f02, f03, f04, f05, f06, f07), 
+                 names_to = "feature", 
+                 values_to = "value")
+  
+    # Per-boxplot (combo x feature) summary stats, full data range
+  stats_temp <- compute_boxplot_stats(df_long_temp, group_col = "combo",
+                                       value_col = "value", facet_col = "feature")
+  stats_csv_filename <- sub("\\.pdf$", "_boxstats.csv", filename)
+  write.csv(stats_temp, file = stats_csv_filename, row.names = FALSE)
+  message(paste("Saved box stats:", stats_csv_filename))
+  
+    # Export raw data used for plotting
+  csv_filename <- sub("\\.pdf$", "_data.csv", filename)
+  #write.csv(df_long_temp, file = csv_filename, row.names = FALSE)
+  message(paste("Saved data:", csv_filename))
+  
+  # Create plots
+  plot_list_temp <- list()
+  features <- unique(df_long_temp$feature)
+  
+  for(i in seq_along(features)) {
+    feature_name <- features[i]
+    
+    p <- df_long_temp %>%
+      filter(feature == feature_name) %>%
+      ggplot(aes(x = combo, y = value, fill = combo)) +
+      geom_boxplot() +
+      scale_x_discrete(drop = FALSE) +  # Keep factor order
+      labs(title = feature_name,
+           x = "Combination",
+           y = "Value") +
+      theme_minimal() +
+      theme(legend.position = "none",
+            plot.title = element_text(hjust = 0.5, face = "bold"),
+            axis.text.x = element_text(angle = 45, hjust = 1))
+    
+    plot_list_temp[[i]] <- p
+  }
+  
+  # Arrange and save
+  final_plot_temp <- plot_grid(plotlist = plot_list_temp, 
+                               ncol = 2, 
+                               labels = "AUTO")
+  
+  #pdf(filename, width = 7, height = 14)
+  #print(final_plot_temp)
+  #dev.off()
+  message(paste("Saved:", filename))
+}
+
+# Create PDFs for each subtyping system
+create_subtype_plots(df_adeno, "Tan_subtype", "plots_Tan_subtype.pdf")
+create_subtype_plots(df_adeno, "Nearest_Rozen_Subtype", "plots_Nearest_Rozen_Subtype.pdf")
+create_subtype_plots(df_adeno, "Nearest_subgroup", "plots_Nearest_subgroup.pdf")
+```
+
+```{r}
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
